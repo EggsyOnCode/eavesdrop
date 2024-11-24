@@ -1,4 +1,4 @@
-package p2p
+package network
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// represents a peer on the tranport layer
+// represents a node on the tranport layer
 type TcpTransport struct {
 	addr     NetAddr
 	listener net.Listener
@@ -21,6 +21,7 @@ type TcpTransport struct {
 	msgCh   chan []byte
 }
 
+// minimalistic rep of peer wrt to the currently running node
 type TcpPeer struct {
 	// conn info about the peer
 	conn net.Conn
@@ -109,6 +110,7 @@ func (t *TcpTransport) Addr() NetAddr {
 }
 
 // dialing a peer
+// TODO: test this func 
 func (t *TcpTransport) Connect(tr Transport) error {
 	// just Dial a connection and accept loop would automatically
 	// add the peer to the peer channel
