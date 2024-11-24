@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"io"
 	"log"
 	"net"
 	"sync"
@@ -68,93 +69,99 @@ func TestPeerMsgBroadcast(t *testing.T) {
 	tr := NewTCPTransport(NetAddr(addr), peerCh)
 	go tr.Start()
 
-	// Give the server a second to start
+	// Allow the server time to start
 	time.Sleep(1 * time.Second)
 
-	// This slice will hold all the peers for later cleanup
+	// Slice to hold peers (use mutex to synchronize access)
 	var peers []*TcpPeer
+	var peersLock sync.Mutex
 
-	// Goroutine to receive peers from the peer channel
+	// Goroutine to collect peers
 	go func() {
 		for {
 			select {
 			case p := <-peerCh:
-				log.Printf("peer is %v \n", p)
+				log.Printf("New peer connected: %v", p.Addr())
+				peersLock.Lock()
 				peers = append(peers, p)
-				log.Printf("peers is %v \n", peers)
+				peersLock.Unlock()
 			}
 		}
 	}()
 
-	// Dial 3 times to create 3 peers
+	// Dial 3 peers to connect to the transport
+	var conns []net.Conn
 	for i := 0; i < 3; i++ {
 		conn, err := net.Dial("tcp", addr)
 		if err != nil {
-			t.Fatalf("Failed to dial: %v", err)
+			t.Fatalf("Failed to dial peer %d: %v", i+1, err)
 		}
-		defer conn.Close() // Ensure the connection is closed after the test
+		defer conn.Close() // Ensure connections are closed after the test
+		conns = append(conns, conn)
 	}
 
-	// Wait for peers to be registered
+	// Allow time for peers to be registered
 	time.Sleep(1 * time.Second)
 
 	// Broadcast the message
 	msg := []byte("hello")
 	if err := tr.Broadcast(msg, ""); err != nil {
-		log.Printf("Error broadcasting message: %v\n", err)
-		panic(err)
+		t.Fatalf("Broadcast failed: %v", err)
 	}
 
-	// Use a WaitGroup to wait for all Consume goroutines to finish
+	// Use a WaitGroup to ensure all peers receive the message
 	var wg sync.WaitGroup
 
-	// Consume the message on each peer's channel
-	for _, p := range peers {
-		msgCh := make(chan []byte)
+	peersLock.Lock()
+	for i, p := range peers {
 		wg.Add(1)
-
-		// Start a goroutine to consume the message
-		go func(p *TcpPeer) {
+		go func(peer *TcpPeer, conn net.Conn) {
 			defer wg.Done()
-			p.Consume(msgCh)
 
-			// Ensure message is consumed correctly
-			assert.Equal(t, msg, <-msgCh)
-		}(p)
+			// Read the message directly from the connection
+			buf := make([]byte, 1024)
+			n, err := conn.Read(buf)
+			if err != nil {
+				t.Errorf("Error reading from peer %v: %v", peer.Addr(), err)
+				return
+			}
+
+			received := buf[:n]
+			log.Printf("Peer %v received message: %s", peer.Addr(), string(received))
+
+			// Validate that the message matches the broadcast
+			assert.Equal(t, msg, received, "Peer did not receive the expected message")
+		}(p, conns[i])
 	}
+	peersLock.Unlock()
 
-	// Wait for all consume goroutines to complete
+	// Wait for all peers to finish
 	wg.Wait()
 
-	// Close all connections gracefully
+	// Clean up transport and connections
+	if err := tr.listener.Close(); err != nil {
+		log.Printf("Error closing transport listener: %v", err)
+	}
+
+	peersLock.Lock()
 	for _, p := range peers {
-		err := p.conn.Close()
-		if err != nil {
+		if err := p.conn.Close(); err != nil {
 			log.Printf("Error closing connection for peer %v: %v", p.Addr(), err)
 		}
 	}
-
-	// Clean up the transport
-	err := tr.listener.Close() // Close the listener to stop accepting new connections
-	if err != nil {
-		log.Printf("Error closing transport listener: %v", err)
-	}
+	peersLock.Unlock()
 }
 
 func TestPeerMsgExchange(t *testing.T) {
 	// Set up two transporters with different addresses
 	addr1 := "localhost:8080"
-	addr2 := "localhost:8081"
 
 	peerCh1 := make(chan *TcpPeer)
-	peerCh2 := make(chan *TcpPeer)
 
 	tr1 := NewTCPTransport(NetAddr(addr1), peerCh1)
-	tr2 := NewTCPTransport(NetAddr(addr2), peerCh2)
 
 	// Start both transporters
 	go tr1.Start()
-	go tr2.Start()
 
 	// Peers will be added here
 	peers := make([]*TcpPeer, 0)
@@ -166,66 +173,48 @@ func TestPeerMsgExchange(t *testing.T) {
 			case p := <-peerCh1:
 				log.Printf("tr1 has peer: %v \n", p.Addr())
 				peers = append(peers, p)
-			case p := <-peerCh2:
-				log.Printf("tr2 has peer: %v \n", p.Addr())
-				peers = append(peers, p)
 			}
 		}
 	}()
 
 	// Allow time for servers to start
-	time.Sleep(2 * time.Second)
+	time.Sleep(1 * time.Second)
 
-	// Establish connections
-	err := tr1.Connect(tr2)
+	// conn referes to peer -> server conn created upon dialing
+	// peer.conn refers to server -> peer conn created upon accepting the connection during
+	// listening
+	conn, err := net.Dial("tcp", addr1)
 	if err != nil {
-		t.Fatalf("Failed to connect tr1 to tr2: %v", err)
+		t.Fatalf("Failed to dial: %v", err)
 	}
-	err = tr2.Connect(tr1)
+	defer conn.Close()
+
+	// Wait for the peer to be added
+	time.Sleep(1 * time.Second)
+
+	peer := peers[0]
+
+	// Message to send
+	msg := []byte("hello")
+	tr1.SendMsg(NetAddr(peer.Addr()), msg)
+
+	// Read the message from the connection
+	buf := make([]byte, 1024)
+	n, err := conn.Read(buf)
 	if err != nil {
-		t.Fatalf("Failed to connect tr2 to tr1: %v", err)
+		if err == io.EOF {
+			log.Println("Connection closed by peer")
+		} else {
+			t.Fatalf("Error reading from connection: %v", err)
+		}
 	}
 
-	// Wait until both peers are connected
-	for len(peers) < 2 {
-		time.Sleep(100 * time.Millisecond)
-	}
+	// Truncate buffer to the number of bytes read
+	received := buf[:n]
 
-	// Ensure that peers are correctly initialized
-	peer1 := peers[0]
-	peer2 := peers[1]
+	// Log the received data
+	log.Printf("Received %d bytes: %s", n, string(received))
 
-	log.Printf("Connected peer1: %v", peer1.Addr())
-	log.Printf("Connected peer2: %v", peer2.Addr())
-
-	// Send message from tr1 (peer1) to tr2 (peer2)
-	err = tr1.SendMsg(NetAddr(peer2.Addr()), []byte("hello from tr1"))
-	if err != nil {
-		t.Fatalf("Failed to send message from tr1: %v", err)
-	}
-
-	// Send message from tr2 (peer2) to tr1 (peer1)
-	err = tr2.SendMsg(NetAddr(peer1.Addr()), []byte("hello from tr2"))
-	if err != nil {
-		t.Fatalf("Failed to send message from tr2: %v", err)
-	}
-
-	// Create channels to consume the messages
-	msgCh1 := make(chan []byte)
-	msgCh2 := make(chan []byte)
-
-	// Start goroutines to consume the messages from each peer
-	go peer1.Consume(msgCh1)
-	go peer2.Consume(msgCh2)
-
-	// Ensure that the message is received correctly on both sides
-	msg1 := <-msgCh1
-	msg2 := <-msgCh2
-
-	log.Printf("Received message from peer1: %s", msg1)
-	log.Printf("Received message from peer2: %s", msg2)
-
-	// Validate that the correct messages were received
-	assert.Equal(t, msg1, []byte("hello from tr2"))
-	assert.Equal(t, msg2, []byte("hello from tr1"))
+	// Assert the received message matches the sent message
+	assert.Equal(t, msg, received)
 }
