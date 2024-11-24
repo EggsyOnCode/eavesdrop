@@ -6,9 +6,9 @@ type MesageTopic byte
 const (
 	MessageTypeFirst MessageType = 0x1
 
-	Observer    MessageType = 0x1
-	Reporter    MessageType = 0x2
-	Transmittor MessageType = 0x3
+	Observer    MesageTopic = 0x1
+	Reporter    MesageTopic = 0x2
+	Transmittor MesageTopic = 0x3
 )
 
 type Message struct {
