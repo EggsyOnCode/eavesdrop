@@ -183,6 +183,9 @@ func (s *Server) sendHandshakeMsgToPeerNode(addr utils.NetAddr) error {
 		return err
 	}
 
+	// removing peer from outgoingPeers
+	delete(s.outgoingPeers, addr)
+
 	return s.Transporter.SendMsg(peer, rpcMsg)
 }
 
