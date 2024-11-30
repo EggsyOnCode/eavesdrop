@@ -11,3 +11,7 @@ func (c *JSONCodec) Encode(v interface{}) ([]byte, error) {
 func (c *JSONCodec) Decode(data []byte, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
+
+func NewJsonCodec() *JSONCodec {
+	return &JSONCodec{}
+}

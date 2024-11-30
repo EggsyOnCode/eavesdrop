@@ -1,6 +1,8 @@
 package network
 
 import (
+	"eavesdrop/rpc"
+	"eavesdrop/utils"
 	"io"
 	"log"
 	"net"
@@ -13,9 +15,9 @@ import (
 
 func TestPeerConnection(t *testing.T) {
 	addr := "localhost:8080"
-	peerCh := make(chan *TcpPeer)
-	tr := NewTCPTransport(NetAddr(addr), peerCh)
-	go tr.Start()
+	peerCh := make(chan *Peer)
+	tr := NewTCPTransport(utils.NetAddr(addr), peerCh, nil)
+	go tr.Start() /// starts listening at port 8080
 
 	time.Sleep(1 * time.Second)
 
@@ -25,10 +27,13 @@ func TestPeerConnection(t *testing.T) {
 	// 		log.Printf("peer is %v \n", p)
 	// 	}
 	// }()
-	net.Dial("tcp", addr)
-	peer := <-peerCh
+	conn, _ := net.Dial("tcp", addr)
+	log.Printf("conn details are %s and %s \n", conn.LocalAddr(), conn.RemoteAddr())
 
-	assert.Equal(t, peer, tr.GetPeer(NetAddr(peer.Addr())))
+	assert.Equal(t, 1, 2)
+	// peer := <-peerCh
+
+	// assert.Equal(t, peer, tr.GetPeer(utils.NetAddr(peer.Addr())))
 }
 
 func TestPeerCommunication(t *testing.T) {
@@ -36,7 +41,7 @@ func TestPeerCommunication(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 
 	// Create a TcpPeer for the "server" side
-	serverPeer := NewTCPPeer(serverConn)
+	serverPeer := NewPeer(serverConn)
 
 	// Message channel for server to consume messages
 	msgCh := make(chan []byte)
@@ -45,7 +50,7 @@ func TestPeerCommunication(t *testing.T) {
 	go serverPeer.Consume(msgCh)
 
 	// Create a TcpPeer for the "client" side
-	clientPeer := NewTCPPeer(clientConn)
+	clientPeer := NewPeer(clientConn)
 
 	// Message to send
 	msg := []byte("hello")
@@ -65,15 +70,16 @@ func TestPeerCommunication(t *testing.T) {
 
 func TestPeerMsgBroadcast(t *testing.T) {
 	addr := "localhost:3500"
-	peerCh := make(chan *TcpPeer)
-	tr := NewTCPTransport(NetAddr(addr), peerCh)
+	peerCh := make(chan *Peer)
+	msgCh := make(chan *rpc.RPCMessage)
+	tr := NewTCPTransport(utils.NetAddr(addr), peerCh, msgCh)
 	go tr.Start()
 
 	// Allow the server time to start
 	time.Sleep(1 * time.Second)
 
 	// Slice to hold peers (use mutex to synchronize access)
-	var peers []*TcpPeer
+	var peers []*Peer
 	var peersLock sync.Mutex
 
 	// Goroutine to collect peers
@@ -105,7 +111,7 @@ func TestPeerMsgBroadcast(t *testing.T) {
 
 	// Broadcast the message
 	msg := []byte("hello")
-	if err := tr.Broadcast(msg, ""); err != nil {
+	if err := tr.Broadcast(msg, peers, "hello"); err != nil {
 		t.Fatalf("Broadcast failed: %v", err)
 	}
 
@@ -115,7 +121,7 @@ func TestPeerMsgBroadcast(t *testing.T) {
 	peersLock.Lock()
 	for i, p := range peers {
 		wg.Add(1)
-		go func(peer *TcpPeer, conn net.Conn) {
+		go func(peer Peer, conn net.Conn) {
 			defer wg.Done()
 
 			// Read the message directly from the connection
@@ -131,7 +137,7 @@ func TestPeerMsgBroadcast(t *testing.T) {
 
 			// Validate that the message matches the broadcast
 			assert.Equal(t, msg, received, "Peer did not receive the expected message")
-		}(p, conns[i])
+		}(*p, conns[i])
 	}
 	peersLock.Unlock()
 
@@ -156,15 +162,16 @@ func TestPeerMsgExchange(t *testing.T) {
 	// Set up two transporters with different addresses
 	addr1 := "localhost:8080"
 
-	peerCh1 := make(chan *TcpPeer)
+	peerCh1 := make(chan *Peer)
 
-	tr1 := NewTCPTransport(NetAddr(addr1), peerCh1)
+	ch := make(chan *rpc.RPCMessage)
+	tr1 := NewTCPTransport(utils.NetAddr(addr1), peerCh1, ch)
 
 	// Start both transporters
 	go tr1.Start()
 
 	// Peers will be added here
-	peers := make([]*TcpPeer, 0)
+	peers := make([]Peer, 0)
 
 	// Use a goroutine to collect the peers
 	go func() {
@@ -172,7 +179,7 @@ func TestPeerMsgExchange(t *testing.T) {
 			select {
 			case p := <-peerCh1:
 				log.Printf("tr1 has peer: %v \n", p.Addr())
-				peers = append(peers, p)
+				peers = append(peers, *p)
 			}
 		}
 	}()
@@ -196,7 +203,7 @@ func TestPeerMsgExchange(t *testing.T) {
 
 	// Message to send
 	msg := []byte("hello")
-	tr1.SendMsg(NetAddr(peer.Addr()), msg)
+	tr1.SendMsg(&peer, msg)
 
 	// Read the message from the connection
 	buf := make([]byte, 1024)

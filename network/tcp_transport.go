@@ -1,6 +1,8 @@
 package network
 
 import (
+	"eavesdrop/rpc"
+	"eavesdrop/utils"
 	"fmt"
 	"io"
 	"log"
@@ -11,38 +13,40 @@ import (
 
 // represents a node on the tranport layer
 type TcpTransport struct {
-	addr     NetAddr
+	addr     utils.NetAddr
 	listener net.Listener
 	// mutex lock to protect the peer channel
 	mu sync.Mutex
-	// listens to incoming conns on socket and sends to peer channel (where it is consumed)
-	peerCh  chan *TcpPeer
-	peerMap map[NetAddr]*TcpPeer
-	msgCh   chan []byte
+
+	// passed as dependencies from the Server
+	peerCh chan *Peer
+	msgCh  chan *rpc.RPCMessage
+	// default codec is json, we can set custom using setCodec
+	codec rpc.Codec
 }
 
 // minimalistic rep of peer wrt to the currently running node
-type TcpPeer struct {
+type Peer struct {
 	// conn info about the peer
 	conn net.Conn
 }
 
-func NewTCPPeer(conn net.Conn) *TcpPeer {
-	return &TcpPeer{conn: conn}
+func NewPeer(conn net.Conn) *Peer {
+	return &Peer{conn: conn}
 }
 
-func (tp *TcpPeer) Addr() string {
+func (tp *Peer) Addr() string {
 	return tp.conn.RemoteAddr().String()
 }
 
 // sending msg to the peer
-func (tp *TcpPeer) SendMsg(msg []byte) error {
+func (tp *Peer) SendMsg(msg []byte) error {
 	_, err := tp.conn.Write(msg)
 	return err
 }
 
 // reading from the peer connection
-func (tp *TcpPeer) Consume(msgCh chan []byte) {
+func (tp *Peer) Consume(msgCh chan []byte) {
 	buf := make([]byte, 0, 1024) // big buffer
 	tmp := make([]byte, 10)      // using small tmo buffer for demonstrating
 	for {
@@ -64,13 +68,18 @@ func (tp *TcpPeer) Consume(msgCh chan []byte) {
 }
 
 // Dependency injection for peerChannel
-func NewTCPTransport(addr NetAddr, peerCh chan *TcpPeer) *TcpTransport {
+func NewTCPTransport(addr utils.NetAddr, peerCh chan *Peer, msgCh chan *rpc.RPCMessage) *TcpTransport {
 	return &TcpTransport{
-		addr:    addr,
-		peerCh:  peerCh,
-		mu:      sync.Mutex{},
-		peerMap: make(map[NetAddr]*TcpPeer),
+		addr:   addr,
+		peerCh: peerCh,
+		mu:     sync.Mutex{},
+		msgCh:  msgCh,
+		codec:  rpc.NewJsonCodec(),
 	}
+}
+
+func (t *TcpTransport) SetCodec(c rpc.Codec) {
+	t.codec = c
 }
 
 func (t *TcpTransport) Start() {
@@ -94,60 +103,58 @@ func (t *TcpTransport) acceptConn() {
 			continue
 		}
 
-		log.Printf("Connection accepted: %v", conn.RemoteAddr())
+		fmt.Printf("Accepted connection from %s\n", conn.RemoteAddr())
 
 		t.mu.Lock()
-		peer := NewTCPPeer(conn)
-		t.peerCh <- peer
-		t.peerMap[NetAddr(peer.Addr())] = peer
-		log.Printf("Peer added: %v", peer.Addr())
+		t.peerCh <- NewPeer(conn)
 		t.mu.Unlock()
 	}
 }
 
-func (t *TcpTransport) Addr() NetAddr {
+func (t *TcpTransport) Addr() utils.NetAddr {
 	return t.addr
 }
 
 // dialing a peer
-// TODO: test this func 
-func (t *TcpTransport) Connect(tr Transport) error {
-	// just Dial a connection and accept loop would automatically
-	// add the peer to the peer channel
-
-	// Resolve the remote address to connect to
-	remoteAddr, err := net.ResolveTCPAddr("tcp", string(tr.Addr()))
+// TODO: test this func
+func (t *TcpTransport) Connect(addr utils.NetAddr) error {
+	// Just dial a connection to the remote peer's address
+	conn, err := net.Dial("tcp", string(addr))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to dial remote address: %w", err)
 	}
 
-	// Resolve the local address to bind to (using port 8080)
-	log.Printf("remote %v and local %v \n", tr.Addr(), t.Addr())
-	localAddr, err := net.ResolveTCPAddr("tcp", string(t.addr))
-	if err != nil {
-		return err
+	// Wrap the connection in a Peer
+	peer := &Peer{
+		conn: conn,
 	}
 
-	// Dial the connection, binding to the local address
-	_, er := net.DialTCP("tcp", localAddr, remoteAddr)
-	if er != nil {
-		return er
+	// Safely add the peer to the peerCh
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// listening to Peer
+	go t.ListenToPeer(peer)
+
+	// Optionally send to peerCh for other consumers to process
+	select {
+	case t.peerCh <- peer:
+	default:
+		// Log if peerCh is full
+		log.Printf("Peer channel full; peer %v not sent to channel", peer.Addr())
 	}
 
+	log.Printf("Successfully connected to peer: %v", peer.Addr())
 	return nil
 }
 
-// adding peer to the peer channel
-func (t *TcpTransport) AddPeer(tr Transport) error {
-	// TODO: currently no validation...
-	return t.Connect(tr)
-}
-
-func (t *TcpTransport) listenToPeer(peer *TcpPeer) {
+func (t *TcpTransport) ListenToPeer(peer *Peer) {
 	defer func() {
 		// Close the connection when done
 		peer.conn.Close()
 	}()
+
+	log.Printf("Listening to peer %s\n", peer.Addr())
 
 	for {
 		buf := make([]byte, 1024) // Allocate buffer
@@ -161,22 +168,29 @@ func (t *TcpTransport) listenToPeer(peer *TcpPeer) {
 			break // Exit loop on error
 		}
 
-		// Send the received message to the message channel
-		t.msgCh <- buf[:n]
+		// decode here received bytes into an RPC message
+		rpcMsg := &rpc.RPCMessage{}
+		if err := t.codec.Decode(buf[:n], rpcMsg); err != nil {
+			panic("error decoding incoing msg")
+		}
+
+		t.msgCh <- rpcMsg
 	}
 }
 
+// Consuming peers from the peer channel
+func (t *TcpTransport) ConsumePeers() <-chan *Peer {
+	return t.peerCh
+}
+
 // Consuming msgs from peers
-func (t *TcpTransport) Consume() <-chan []byte {
+func (t *TcpTransport) ConsumeMsgs() <-chan *rpc.RPCMessage {
 	return t.msgCh
 }
 
 // Sending msg to a peer
-func (t *TcpTransport) SendMsg(addr NetAddr, msg []byte) error {
-	peer, ok := t.peerMap[addr]
-	if !ok {
-		return fmt.Errorf("Peer not found: %s", addr)
-	}
+func (t *TcpTransport) SendMsg(peer *Peer, msg []byte) error {
+	// no need to check existence, is ensured by Server
 
 	// Log the peer and the message to be sent
 	log.Printf("Sending message to peer %s: %s", peer.Addr(), msg)
@@ -192,9 +206,9 @@ func (t *TcpTransport) SendMsg(addr NetAddr, msg []byte) error {
 }
 
 // Broadcasting msg to all peers
-func (t *TcpTransport) Broadcast(msg []byte, exclude NetAddr) error {
-	for addr, peer := range t.peerMap {
-		if addr == exclude {
+func (t *TcpTransport) Broadcast(msg []byte, peers []*Peer, exclude utils.NetAddr) error {
+	for _, peer := range peers {
+		if utils.NetAddr(peer.Addr()) == exclude {
 			continue
 		}
 
@@ -205,19 +219,6 @@ func (t *TcpTransport) Broadcast(msg []byte, exclude NetAddr) error {
 	}
 
 	return nil
-}
-
-func (t *TcpTransport) IsPeer(tr Transport) bool {
-	_, ok := t.peerMap[tr.Addr()]
-	return ok
-}
-
-func (t *TcpTransport) GetPeer(addr NetAddr) *TcpPeer {
-	return t.peerMap[addr]
-}
-
-func (t *TcpTransport) DeletePeer(addr NetAddr) {
-	delete(t.peerMap, addr)
 }
 
 // TODO: what if the peer is no longer available, we'll still be broadcasting / consuming from it
