@@ -7,6 +7,9 @@ import (
 	"eavesdrop/utils"
 	"log"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestRpcBetweenTwoNodes(t *testing.T) {
@@ -27,36 +30,41 @@ func TestRpcBetweenTwoNodes(t *testing.T) {
 
 	s2 := NewServer(s2Opts, ocr)
 
-	if err := s1.Transporter.Connect(s2.Transporter.Addr()); err!=nil {
-		t.Fatal(err)
+	if err := s1.ConnectToPeerNode(utils.NetAddr(s2.ListenAddr)); err != nil {
+		log.Fatalf("failed to connect to peer node: %v", err)
 	}
 
-	statusMsg := &rpc.StatusMsg{
-		Id: s1.ID(),
+	if err := s2.ConnectToPeerNode(utils.NetAddr(s1.ListenAddr)); err != nil {
+		log.Fatalf("failed to connect to peer node: %v", err)
 	}
 
-	sMsg, _ := statusMsg.Bytes(s1.Codec)
+	time.Sleep(2 * time.Second)
 
-	msg := &rpc.Message{
-		Topic:   rpc.Server,
-		Headers: rpc.MessageStatus,
-		Data:    sMsg,
+	assert.NotNil(t, s1.peerMap[s2.id.String()])
+	assert.NotNil(t, s2.peerMap[s1.id.String()])
+
+	// Construct a NewEpochMsg
+	newEpochMsg := &rpc.NewEpochMsg{
+		New:     "new",
+		Current: "current",
 	}
 
-	msgBytes, _ := msg.Bytes(s1.Codec)
-	log.Printf("payload being sent %s \n", msgBytes)
-
-	rpcMsg := rpc.NewRPCMessage(
+	rpcMsg, _ := rpc.NewRPCMessageBuilder(
 		utils.NetAddr(s1.ListenAddr),
-		msgBytes,
-	)
+		s1.Codec,
+	).SetHeaders(
+		rpc.MessageNewEpoch,
+	).SetTopic(
+		rpc.Server,
+	).SetPayload(newEpochMsg).Bytes()
 
-	rpcBytes, _ := rpcMsg.Bytes(s1.Codec)
-	log.Printf("rpc msg being sent %s \n", rpcBytes)
-
-	Er := s1.sendMsg(utils.NetAddr(s2.ListenAddr), rpcBytes)
-	log.Printf("%v \n", Er)
+	log.Printf("public keys of s1 %v \n", s1.ID())
+	log.Printf("public keys of s2 %v \n", s2.ID())
+	log.Printf("peerMap of s1 %+v \n", s1.peerMap)
+	// Send the message
+	if err := s1.sendMsg(s2.ID(), rpcMsg); err != nil {
+		log.Fatalf("failed to send message: %v", err)
+	}
 
 	select {}
 }
-

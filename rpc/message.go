@@ -15,6 +15,7 @@ const (
 	Observer    MesageTopic = 0x1
 	Reporter    MesageTopic = 0x2
 	Transmittor MesageTopic = 0x3
+
 	Server      MesageTopic = 0x4
 )
 
@@ -35,7 +36,6 @@ func (m *Message) Bytes(c Codec) ([]byte, error) {
 	return c.Encode(m)
 }
 
-
 func (m *Message) String() string {
 	return fmt.Sprintf("topic %v, headers %v , data %s ", m.Topic, m.Headers, m.Data)
 }
@@ -47,10 +47,10 @@ type NewEpochMsg struct {
 }
 
 type StatusMsg struct {
-	Id crypto.PublicKey
+	Id         crypto.PublicKey
+	ListenAddr string
 }
 
 func (status *StatusMsg) Bytes(c Codec) ([]byte, error) {
 	return c.Encode(status)
 }
-

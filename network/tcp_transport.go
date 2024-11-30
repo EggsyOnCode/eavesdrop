@@ -28,20 +28,44 @@ type TcpTransport struct {
 // minimalistic rep of peer wrt to the currently running node
 type Peer struct {
 	// conn info about the peer
-	conn net.Conn
+	// writeSock
+	writeSock net.Conn
+	// readSock
+	readSock net.Conn
 }
 
-func NewPeer(conn net.Conn) *Peer {
-	return &Peer{conn: conn}
+func NewPeer(writeSock net.Conn) *Peer {
+	return &Peer{writeSock: writeSock}
 }
 
 func (tp *Peer) Addr() string {
-	return tp.conn.RemoteAddr().String()
+	// TODO: danger null error
+	if tp.writeSock == nil {
+		return tp.readSock.RemoteAddr().String()
+	} else {
+		return tp.writeSock.RemoteAddr().String()
+	}
+}
+
+func (tp *Peer) SetReadSock(conn net.Conn) {
+	tp.readSock = conn
+}
+
+func (tp *Peer) SetWriteSock(conn net.Conn) {
+	tp.writeSock = conn
+}
+
+func (tp *Peer) WriteSock() net.Conn {
+	return tp.writeSock
+}
+
+func (tp *Peer) ReadSock() net.Conn {
+	return tp.readSock
 }
 
 // sending msg to the peer
 func (tp *Peer) SendMsg(msg []byte) error {
-	_, err := tp.conn.Write(msg)
+	_, err := tp.writeSock.Write(msg)
 	return err
 }
 
@@ -50,8 +74,8 @@ func (tp *Peer) Consume(msgCh chan []byte) {
 	buf := make([]byte, 0, 1024) // big buffer
 	tmp := make([]byte, 10)      // using small tmo buffer for demonstrating
 	for {
-		tp.conn.SetReadDeadline(time.Now().Add(5 * time.Second)) // Set a read timeout
-		n, err := tp.conn.Read(tmp)
+		tp.readSock.SetReadDeadline(time.Now().Add(5 * time.Second)) // Set a read timeout
+		n, err := tp.readSock.Read(tmp)
 		if err != nil {
 			if err == io.EOF {
 				fmt.Println("Connection closed by peer")
@@ -106,7 +130,10 @@ func (t *TcpTransport) acceptConn() {
 		fmt.Printf("Accepted connection from %s\n", conn.RemoteAddr())
 
 		t.mu.Lock()
-		t.peerCh <- NewPeer(conn)
+		// incoming connection are rep using readSockets...
+		p := NewPeer(nil)
+		p.SetReadSock(conn)
+		t.peerCh <- p
 		t.mu.Unlock()
 	}
 }
@@ -116,7 +143,6 @@ func (t *TcpTransport) Addr() utils.NetAddr {
 }
 
 // dialing a peer
-// TODO: test this func
 func (t *TcpTransport) Connect(addr utils.NetAddr) error {
 	// Just dial a connection to the remote peer's address
 	conn, err := net.Dial("tcp", string(addr))
@@ -126,15 +152,16 @@ func (t *TcpTransport) Connect(addr utils.NetAddr) error {
 
 	// Wrap the connection in a Peer
 	peer := &Peer{
-		conn: conn,
+		writeSock: conn,
 	}
 
 	// Safely add the peer to the peerCh
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// listening to Peer
-	go t.ListenToPeer(peer)
+	// ctx: we don't listen to writeSockets
+	// // listening to Peer
+	// go t.ListenToPeer(peer)
 
 	// Optionally send to peerCh for other consumers to process
 	select {
@@ -151,14 +178,14 @@ func (t *TcpTransport) Connect(addr utils.NetAddr) error {
 func (t *TcpTransport) ListenToPeer(peer *Peer) {
 	defer func() {
 		// Close the connection when done
-		peer.conn.Close()
+		peer.readSock.Close()
 	}()
 
 	log.Printf("Listening to peer %s\n", peer.Addr())
 
 	for {
 		buf := make([]byte, 1024) // Allocate buffer
-		n, err := peer.conn.Read(buf)
+		n, err := peer.readSock.Read(buf)
 		if err != nil {
 			if err == io.EOF {
 				fmt.Printf("Connection closed by peer: %s\n", peer.Addr())
@@ -173,6 +200,8 @@ func (t *TcpTransport) ListenToPeer(peer *Peer) {
 		if err := t.codec.Decode(buf[:n], rpcMsg); err != nil {
 			panic("error decoding incoing msg")
 		}
+
+		rpcMsg.From = utils.NetAddr(peer.Addr())
 
 		t.msgCh <- rpcMsg
 	}
@@ -195,7 +224,7 @@ func (t *TcpTransport) SendMsg(peer *Peer, msg []byte) error {
 	// Log the peer and the message to be sent
 	log.Printf("Sending message to peer %s: %s", peer.Addr(), msg)
 
-	_, err := peer.conn.Write(msg)
+	_, err := peer.writeSock.Write(msg)
 	if err != nil {
 		log.Printf("Error writing message to peer: %v", err)
 	}
@@ -212,7 +241,7 @@ func (t *TcpTransport) Broadcast(msg []byte, peers []*Peer, exclude utils.NetAdd
 			continue
 		}
 
-		_, err := peer.conn.Write(msg)
+		_, err := peer.writeSock.Write(msg)
 		if err != nil {
 			return err
 		}

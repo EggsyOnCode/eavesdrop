@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 )
 
 type ServerOpts struct {
@@ -31,10 +32,10 @@ type Server struct {
 	quitCh       chan struct{} // channel for signals to stop server
 
 	// send via dependency injection to Transport layer
-	mu          *sync.RWMutex
-	peerMapAddr map[utils.NetAddr]*network.Peer     // temp map to store accepetdConn whose public IDs are not known ; once tehy are found ; items are deleted
-	peerMap     map[*crypto.PublicKey]*network.Peer // map of peers ; key is the public key of the peer
-	msgCh       chan rpc.RPCMessage                 // channel for messages
+	mu            *sync.RWMutex
+	incomingPeers map[utils.NetAddr]*network.Peer     // temp peer Maps
+	outgoingPeers map[utils.NetAddr]*network.Peer     // temp peer Maps
+	peerMap       map[string]*network.Peer // map of peers ; key is the public key of the peer
 }
 
 func (s *Server) ID() crypto.PublicKey {
@@ -44,10 +45,12 @@ func (s *Server) ID() crypto.PublicKey {
 func NewServer(opts *ServerOpts, ocr *ocr.OCR) *Server {
 	// TODO: checks for inputs like null checks etc
 
-	peerCh := make(chan *network.Peer)
-	msgCh := make(chan *rpc.RPCMessage)
+	peerCh := make(chan *network.Peer, 1024)
+	msgCh := make(chan *rpc.RPCMessage, 1024)
 	transporter := network.NewTCPTransport(utils.NetAddr(opts.ListenAddr), peerCh, msgCh)
-	rpcProcessor := &ServerRPCProcessor{handlers: make(map[rpc.MesageTopic]rpc.RPCProcessor)}
+	rpcProcessor := &ServerRPCProcessor{
+		handlers: make(map[rpc.MesageTopic]rpc.RPCProcessor),
+	}
 
 	// Register OCR-specific handlers
 	rpcProcessor.RegisterHandler(rpc.Observer, ocr.Observer)
@@ -55,16 +58,17 @@ func NewServer(opts *ServerOpts, ocr *ocr.OCR) *Server {
 	rpcProcessor.RegisterHandler(rpc.Transmittor, ocr.Transmitter)
 
 	s := &Server{
-		Transporter:  transporter,
-		RPCProcessor: rpcProcessor,
-		peerCh:       peerCh,
-		peerLock:     &sync.RWMutex{},
-		OCR:          ocr,
-		ServerOpts:   opts,
-		quitCh:       make(chan struct{}),
-		mu:           &sync.RWMutex{},
-		peerMap:      make(map[*crypto.PublicKey]*network.Peer),
-		peerMapAddr:  make(map[utils.NetAddr]*network.Peer),
+		Transporter:   transporter,
+		RPCProcessor:  rpcProcessor,
+		peerCh:        peerCh,
+		peerLock:      &sync.RWMutex{},
+		OCR:           ocr,
+		ServerOpts:    opts,
+		quitCh:        make(chan struct{}),
+		mu:            &sync.RWMutex{},
+		peerMap:       make(map[string]*network.Peer),
+		incomingPeers: make(map[utils.NetAddr]*network.Peer),
+		outgoingPeers: make(map[utils.NetAddr]*network.Peer),
 	}
 
 	// setting server's ID
@@ -79,6 +83,9 @@ func NewServer(opts *ServerOpts, ocr *ocr.OCR) *Server {
 	}
 
 	transporter.SetCodec(s.Codec)
+	s.RPCProcessor.peerMap = &s.peerMap
+	s.RPCProcessor.incomingPeers = &s.incomingPeers
+	s.RPCProcessor.outgoingPeers = &s.outgoingPeers
 
 	// TODO: fire off listeners in the server.Start() goroutine
 	go s.Start()
@@ -103,14 +110,33 @@ free:
 
 			s.mu.Lock()
 
-			if _, exists := s.peerMapAddr[utils.NetAddr(peer.Addr())]; exists {
-				return fmt.Errorf("peer %s already connected", peer.Addr())
+			if peer.ReadSock() == nil {
+				// peer is outgoing
+				if _, exists := s.outgoingPeers[utils.NetAddr(peer.WriteSock().RemoteAddr().String())]; exists {
+					fmt.Printf("outgoing peer %s already connected", peer.Addr())
+					continue
+				}
+
+				s.outgoingPeers[utils.NetAddr(peer.Addr())] = peer
+				log.Printf("peer %v added to outgoing map of %v ", peer.Addr(), s.ListenAddr)
+
+			} else {
+				// can happen if p2 , after receiving status msg dials to p1
+				// can happen if p2 connects to p1 before p1 connects to p2
+
+				// peer is incoming
+				if _, exists := s.incomingPeers[utils.NetAddr(peer.ReadSock().RemoteAddr().String())]; exists {
+					fmt.Printf("peer %s already connected", peer.Addr())
+					continue
+				}
+
+				s.incomingPeers[utils.NetAddr(peer.Addr())] = peer
+				log.Printf("peer %v added to incoming map of %v ", peer.Addr(), s.ListenAddr)
+
+				go s.Transporter.ListenToPeer(peer)
 			}
 
-			s.peerMapAddr[utils.NetAddr(peer.Addr())] = peer
-			go s.Transporter.ListenToPeer(peer,)
-
-			log.Printf("peer added to peerMap addr: %v", peer.Addr())
+			s.mu.Unlock()
 
 		case rpcMsg := <-s.Transporter.ConsumeMsgs():
 			msg, err := s.RPCProcessor.DefaultRPCDecoder(rpcMsg, s.Codec)
@@ -119,21 +145,8 @@ free:
 				continue
 			}
 
-			switch msg.Data.(type) {
-			case rpc.StatusMsg:
-				statusMsg := msg.Data.(rpc.StatusMsg)
-				peer, ok := s.peerMapAddr[msg.From]
-				if !ok {
-					log.Printf("peer not found during stautus msg reception")
-					continue
-				}
-
-				s.peerMap[&statusMsg.Id] = peer
-			default:
-				if err := s.RPCProcessor.ProcessMessage(msg); err != nil {
-					log.Printf("error %v", err)
-					continue
-				}
+			if err := s.RPCProcessor.ProcessMessage(msg); err != nil {
+				log.Printf("error %v", err)
 			}
 
 		case <-s.quitCh:
@@ -145,8 +158,61 @@ free:
 }
 
 // addr is that of the peer; only if its found in the peerMap
-func (s *Server) sendMsg(addr utils.NetAddr, msg []byte) error {
-	peer, ok := s.peerMapAddr[addr]
+func (s *Server) sendHandshakeMsgToPeerNode(addr utils.NetAddr) error {
+	// outgoing peers have writeSock which we can write to
+	peer, ok := s.outgoingPeers[addr]
+	if !ok {
+		return fmt.Errorf("peer not found")
+	}
+
+	statusMsg := &rpc.StatusMsg{
+		Id:         s.ID(),
+		ListenAddr: s.ListenAddr,
+	}
+	// constructing msg
+	rpcMsg, err := rpc.NewRPCMessageBuilder(
+		utils.NetAddr(s.ListenAddr),
+		s.Codec,
+	).SetHeaders(
+		rpc.MessageStatus,
+	).SetTopic(
+		rpc.Server,
+	).SetPayload(statusMsg).Bytes()
+
+	if err != nil {
+		return err
+	}
+
+	return s.Transporter.SendMsg(peer, rpcMsg)
+}
+
+// remote Server's ListenAddr
+func (s *Server) ConnectToPeerNode(addr utils.NetAddr) error {
+	// connect to the peer
+	time.Sleep(1 * time.Second)
+
+	if err := s.Transporter.Connect(addr); err != nil {
+		return err
+	}
+
+	time.Sleep(1 * time.Second)
+
+	// sending a handshake msg to the peer
+	if err := s.sendHandshakeMsgToPeerNode(addr); err != nil {
+		return err
+	}
+
+	fmt.Printf("connected to peer %s", addr)
+
+	return nil
+}
+
+// sending msg using peer's ID
+func (s *Server) sendMsg(id crypto.PublicKey, msg []byte) error {
+	// check if peer exists in peerMap
+	log.Printf("Complete peerMap of s1: %+v\n", s.peerMap)
+	log.Printf("id is : %+v\n", id)
+	peer, ok := s.peerMap[id.String()]
 	if !ok {
 		return fmt.Errorf("peer not found")
 	}

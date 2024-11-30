@@ -10,7 +10,7 @@ type RPCMessage struct {
 }
 
 // payload here will be of type Message but in serialized bytes format
-func NewRPCMessage(from utils.NetAddr, payload []byte) *RPCMessage {
+func NewRPCMessage(from utils.NetAddr, payload []byte, ) *RPCMessage {
 	return &RPCMessage{
 		From:    from,
 		Payload: payload,

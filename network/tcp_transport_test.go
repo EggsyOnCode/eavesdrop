@@ -151,7 +151,7 @@ func TestPeerMsgBroadcast(t *testing.T) {
 
 	peersLock.Lock()
 	for _, p := range peers {
-		if err := p.conn.Close(); err != nil {
+		if err := p.writeSock.Close(); err != nil {
 			log.Printf("Error closing connection for peer %v: %v", p.Addr(), err)
 		}
 	}
