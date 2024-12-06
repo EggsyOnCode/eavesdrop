@@ -6,9 +6,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"math/big"
-
 )
 
 type PrivateKey struct {
@@ -45,6 +45,14 @@ type PublicKey []byte
 
 func (p *PrivateKey) PublicKey() PublicKey {
 	return elliptic.MarshalCompressed(elliptic.P256(), p.key.X, p.key.Y)
+}
+
+func StringToPublicKey(hexString string) (PublicKey, error) {
+	bytes, err := hex.DecodeString(hexString)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hex string: %v", err)
+	}
+	return PublicKey(bytes), nil
 }
 
 // slice of bytes which would be sent over the network

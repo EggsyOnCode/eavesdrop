@@ -1,4 +1,4 @@
-package node
+package ocr
 
 import (
 	"eavesdrop/network"

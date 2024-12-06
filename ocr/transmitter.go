@@ -2,6 +2,10 @@ package ocr
 
 import "eavesdrop/rpc"
 
+type TransmitterRegistry struct {
+	Transmitters map[string]Transmitter // i.e  keys are JobIDs
+}
+
 type Transmitter interface {
 	// TODO: signature of this func is yet to be decided
 	Transmit() error

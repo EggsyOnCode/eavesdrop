@@ -6,26 +6,22 @@ import (
 )
 
 type OCR struct {
-	Observer    Observer
-	Reporter    Reporter
-	Transmitter Transmitter
-	Codec       rpc.Codec
+	ObserverReg    *ObserverRegistry
+	TransmitterReg *TransmitterRegistry
+	Codec          rpc.Codec
+	Reporter       *ReportingEngine
+	Pacemaker      *Pacemaker
+	Server         *Server
 }
 
 type OCRBuilder struct {
 	observer    Observer
-	reporter    Reporter
 	transmitter Transmitter
 	codec       rpc.Codec
 }
 
 func (b *OCRBuilder) WithObserver(observer Observer) *OCRBuilder {
 	b.observer = observer
-	return b
-}
-
-func (b *OCRBuilder) WithReporter(reporter Reporter) *OCRBuilder {
-	b.reporter = reporter
 	return b
 }
 
@@ -40,14 +36,11 @@ func (b *OCRBuilder) WithCodec(codec rpc.Codec) *OCRBuilder {
 }
 
 func (b *OCRBuilder) Build() (*OCR, error) {
-	if b.observer == nil || b.reporter == nil || b.transmitter == nil || b.codec == nil {
+	if b.observer == nil || b.transmitter == nil || b.codec == nil {
 		return nil, fmt.Errorf("missing required components")
 	}
 
 	return &OCR{
-		Observer:    b.observer,
-		Reporter:    b.reporter,
-		Transmitter: b.transmitter,
-		Codec:       b.codec,
+		Codec: b.codec,
 	}, nil
 }

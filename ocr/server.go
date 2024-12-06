@@ -1,9 +1,8 @@
-package node
+package ocr
 
 import (
 	"eavesdrop/crypto"
 	"eavesdrop/network"
-	"eavesdrop/ocr"
 	"eavesdrop/rpc"
 	"eavesdrop/utils"
 	"fmt"
@@ -16,7 +15,6 @@ type ServerOpts struct {
 	ListenAddr     string
 	CodecType      rpc.CodecType
 	BootStrapNodes []string           // NetAddr of bootstrap nodes (fetched from Contract)
-	Logger         log.Logger         // interface for all loggers
 	privateKey     *crypto.PrivateKey // TODO: what does OCR use for ID? (fetched from the contract)
 	id             crypto.PublicKey   // derived from PrivateKey
 }
@@ -25,7 +23,6 @@ type Server struct {
 	*ServerOpts
 	Transporter  network.Transport
 	RPCProcessor *ServerRPCProcessor
-	OCR          *ocr.OCR
 	peerLock     *sync.RWMutex      // protects peerCh
 	peerCh       chan *network.Peer // peerCh used by Transporters
 	Codec        rpc.Codec
@@ -33,16 +30,16 @@ type Server struct {
 
 	// send via dependency injection to Transport layer
 	mu            *sync.RWMutex
-	incomingPeers map[utils.NetAddr]*network.Peer     // temp peer Maps
-	outgoingPeers map[utils.NetAddr]*network.Peer     // temp peer Maps
-	peerMap       map[string]*network.Peer // map of peers ; key is the public key of the peer
+	incomingPeers map[utils.NetAddr]*network.Peer // temp peer Maps
+	outgoingPeers map[utils.NetAddr]*network.Peer // temp peer Maps
+	peerMap       map[string]*network.Peer        // map of peers ; key is the public key of the peer
 }
 
 func (s *Server) ID() crypto.PublicKey {
 	return s.id
 }
 
-func NewServer(opts *ServerOpts, ocr *ocr.OCR) *Server {
+func NewServer(opts *ServerOpts) *Server {
 	// TODO: checks for inputs like null checks etc
 
 	peerCh := make(chan *network.Peer, 1024)
@@ -52,17 +49,11 @@ func NewServer(opts *ServerOpts, ocr *ocr.OCR) *Server {
 		handlers: make(map[rpc.MesageTopic]rpc.RPCProcessor),
 	}
 
-	// Register OCR-specific handlers
-	rpcProcessor.RegisterHandler(rpc.Observer, ocr.Observer)
-	rpcProcessor.RegisterHandler(rpc.Reporter, ocr.Reporter)
-	rpcProcessor.RegisterHandler(rpc.Transmittor, ocr.Transmitter)
-
 	s := &Server{
 		Transporter:   transporter,
 		RPCProcessor:  rpcProcessor,
 		peerCh:        peerCh,
 		peerLock:      &sync.RWMutex{},
-		OCR:           ocr,
 		ServerOpts:    opts,
 		quitCh:        make(chan struct{}),
 		mu:            &sync.RWMutex{},
@@ -211,14 +202,33 @@ func (s *Server) ConnectToPeerNode(addr utils.NetAddr) error {
 }
 
 // sending msg using peer's ID
-func (s *Server) sendMsg(id crypto.PublicKey, msg []byte) error {
+func (s *Server) SendMsg(id string, msg []byte) error {
 	// check if peer exists in peerMap
 	log.Printf("Complete peerMap of s1: %+v\n", s.peerMap)
 	log.Printf("id is : %+v\n", id)
-	peer, ok := s.peerMap[id.String()]
+	idHex, e := crypto.StringToPublicKey(id)
+	if e != nil {
+		return e
+	}
+	peer, ok := s.peerMap[idHex.String()]
 	if !ok {
 		return fmt.Errorf("peer not found")
 	}
 
 	return s.Transporter.SendMsg(peer, msg)
+}
+
+func (s *Server) BroadcastMsg(msg []byte) error {
+	// send msg to all peers
+	for _, peer := range s.peerMap {
+		if err := s.Transporter.SendMsg(peer, msg); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Server) Stop() {
+	close(s.quitCh)
 }

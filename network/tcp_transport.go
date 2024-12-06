@@ -9,6 +9,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/romana/rlog"
 )
 
 // represents a node on the tranport layer
@@ -78,9 +80,9 @@ func (tp *Peer) Consume(msgCh chan []byte) {
 		n, err := tp.readSock.Read(tmp)
 		if err != nil {
 			if err == io.EOF {
-				fmt.Println("Connection closed by peer")
+				rlog.Info("Connection closed by peer")
 			} else {
-				fmt.Println("Read error:", err)
+				rlog.Errorf("Read error:", err)
 				break
 			}
 		}
@@ -127,7 +129,7 @@ func (t *TcpTransport) acceptConn() {
 			continue
 		}
 
-		fmt.Printf("Accepted connection from %s\n", conn.RemoteAddr())
+		rlog.Infof("Accepted connection from %s\n", conn.RemoteAddr())
 
 		t.mu.Lock()
 		// incoming connection are rep using readSockets...
@@ -188,7 +190,7 @@ func (t *TcpTransport) ListenToPeer(peer *Peer) {
 		n, err := peer.readSock.Read(buf)
 		if err != nil {
 			if err == io.EOF {
-				fmt.Printf("Connection closed by peer: %s\n", peer.Addr())
+				rlog.Errorf("Connection closed by peer: %s\n", peer.Addr())
 			} else {
 				fmt.Printf("Error reading from peer %s: %v\n", peer.Addr(), err)
 			}

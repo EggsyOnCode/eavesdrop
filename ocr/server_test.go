@@ -1,8 +1,7 @@
-package node
+package ocr
 
 import (
 	"eavesdrop/crypto"
-	"eavesdrop/ocr"
 	"eavesdrop/rpc"
 	"eavesdrop/utils"
 	"log"
@@ -19,8 +18,7 @@ func TestRpcBetweenTwoNodes(t *testing.T) {
 		privateKey: crypto.GeneratePrivateKey(),
 	}
 
-	ocr := &ocr.OCR{}
-	s1 := NewServer(s1Opts, ocr)
+	s1 := NewServer(s1Opts )
 
 	s2Opts := &ServerOpts{
 		ListenAddr: "127.0.0.1:4000",
@@ -28,7 +26,7 @@ func TestRpcBetweenTwoNodes(t *testing.T) {
 		privateKey: crypto.GeneratePrivateKey(),
 	}
 
-	s2 := NewServer(s2Opts, ocr)
+	s2 := NewServer(s2Opts )
 
 	if err := s1.ConnectToPeerNode(utils.NetAddr(s2.ListenAddr)); err != nil {
 		log.Fatalf("failed to connect to peer node: %v", err)
@@ -62,7 +60,7 @@ func TestRpcBetweenTwoNodes(t *testing.T) {
 	log.Printf("public keys of s2 %v \n", s2.ID())
 	log.Printf("peerMap of s1 %+v \n", s1.peerMap)
 	// Send the message
-	if err := s1.sendMsg(s2.ID(), rpcMsg); err != nil {
+	if err := s1.SendMsg(s2.ID(), rpcMsg); err != nil {
 		log.Fatalf("failed to send message: %v", err)
 	}
 

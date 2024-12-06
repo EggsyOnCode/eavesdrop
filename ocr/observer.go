@@ -2,6 +2,10 @@ package ocr
 
 import "eavesdrop/rpc"
 
+type ObserverRegistry struct {
+	Observers map[string]Observer // i.e  keys are JobIDs
+}
+
 type Observer interface {
 	// Observe sends the observed event to the read-only channel.
 	Observe(chan<- interface{}) error
