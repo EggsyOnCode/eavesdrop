@@ -15,4 +15,5 @@ type Transport interface {
 	Addr() utils.NetAddr
 	Start()
 	ListenToPeer(*Peer)
+	Stop() error
 }

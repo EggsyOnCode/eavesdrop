@@ -8,6 +8,8 @@ import (
 	"log"
 	"net"
 	"reflect"
+
+	"github.com/romana/rlog"
 )
 
 type ServerRPCProcessor struct {
@@ -104,10 +106,10 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 	// 2. switch over the MsgHeaders
 	switch msg.Headers {
 	case rpc.MessageNewEpoch:
-		// mock implementation...
+		rlog.Println("we are here....")
 
 		// the msg received is of type NewEpoch
-		newMsg := &rpc.NewEpochMsg{}
+		newMsg := &rpc.NewEpochMesage{}
 
 		if err := codec.Decode(msg.Data, newMsg); err != nil {
 			return nil, err

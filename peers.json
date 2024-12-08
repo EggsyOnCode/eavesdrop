@@ -1,0 +1,12 @@
+[
+  {
+    "privateKey": "gcovFMr5oTFJBq9Egg5p2EKH2oZfkTGsk2zCBH8KMaQ=",
+    "publicKey": "BGKgXbrGyTGfCtpQMyC33/Dt2O0yyMi9NLFQdAyf9p2xBqWpW4H7uNp6gEbUjfhtRJWLHx0+FXLX0k5JNyuB3Pc=",
+    "listenAddr": "127.0.0.1:4001"
+  },
+  {
+    "privateKey": "jp0g/bC2Z42W6p8Bh/iFHUeepGUNrHGL5AxcEzilxx4=",
+    "publicKey": "BPK6oUDj08WEJW4wFpINVjKY99Sbl/nV5VMaIzQM//XHocu7ihwNhxT1DW+SziytKHjwScMnO9libDQxC7lKy9Q=",
+    "listenAddr": "127.0.0.1:4002"
+  }
+]

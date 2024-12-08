@@ -9,13 +9,15 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/romana/rlog"
 )
 
 type ServerOpts struct {
 	ListenAddr     string
 	CodecType      rpc.CodecType
 	BootStrapNodes []string           // NetAddr of bootstrap nodes (fetched from Contract)
-	privateKey     *crypto.PrivateKey // TODO: what does OCR use for ID? (fetched from the contract)
+	PrivateKey     *crypto.PrivateKey // TODO: what does OCR use for ID? (fetched from the contract)
 	id             crypto.PublicKey   // derived from PrivateKey
 }
 
@@ -63,7 +65,7 @@ func NewServer(opts *ServerOpts) *Server {
 	}
 
 	// setting server's ID
-	s.id = s.privateKey.PublicKey()
+	s.id = s.PrivateKey.PublicKey()
 
 	// setting up codec
 	switch s.CodecType {
@@ -78,15 +80,16 @@ func NewServer(opts *ServerOpts) *Server {
 	s.RPCProcessor.incomingPeers = &s.incomingPeers
 	s.RPCProcessor.outgoingPeers = &s.outgoingPeers
 
-	// TODO: fire off listeners in the server.Start() goroutine
-	go s.Start()
+	// // TODO: fire off listeners in the server.Start() goroutine
+	// go s.Start()
 
 	return s
 }
 
-func (s *Server) Start() error {
+func (s *Server) Start() {
 	// start transporter
 	s.Transporter.Start()
+	defer s.Transporter.Stop()
 
 	log.Printf("accepting TCP connections on %v", s.ListenAddr)
 	// bootstrap nodes
@@ -132,12 +135,12 @@ free:
 		case rpcMsg := <-s.Transporter.ConsumeMsgs():
 			msg, err := s.RPCProcessor.DefaultRPCDecoder(rpcMsg, s.Codec)
 			if err != nil {
-				log.Printf("error %v \n", err)
+				rlog.Errorf("error decoding %v \n", err)
 				continue
 			}
 
 			if err := s.RPCProcessor.ProcessMessage(msg); err != nil {
-				log.Printf("error %v", err)
+				rlog.Errorf("error processing rpc msg %v", err)
 			}
 
 		case <-s.quitCh:
@@ -145,7 +148,6 @@ free:
 		}
 	}
 	log.Printf("server stopped")
-	return nil
 }
 
 // addr is that of the peer; only if its found in the peerMap
@@ -203,6 +205,21 @@ func (s *Server) ConnectToPeerNode(addr utils.NetAddr) error {
 
 // sending msg using peer's ID
 func (s *Server) SendMsg(id string, msg []byte) error {
+	// constructing rpcMsg from msg in args
+	// msg contains payload, headers, topic i.e the rpc.Message structure
+	rpcMsg, err := rpc.NewRPCMessageBuilder(
+		utils.NetAddr(s.ListenAddr),
+		s.Codec,
+	).SetMessage(msg).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build rpc message: %w", err)
+	}
+
+	rpcMsgBytes, err := rpcMsg.Bytes(s.Codec)
+	if err != nil {
+		return fmt.Errorf("failed to encode rpc message: %w", err)
+	}
+
 	// check if peer exists in peerMap
 	log.Printf("Complete peerMap of s1: %+v\n", s.peerMap)
 	log.Printf("id is : %+v\n", id)
@@ -215,13 +232,28 @@ func (s *Server) SendMsg(id string, msg []byte) error {
 		return fmt.Errorf("peer not found")
 	}
 
-	return s.Transporter.SendMsg(peer, msg)
+	return s.Transporter.SendMsg(peer, rpcMsgBytes)
 }
 
 func (s *Server) BroadcastMsg(msg []byte) error {
+	// constructing rpcMsg from msg in args
+	// msg contains payload, headers, topic i.e the rpc.Message structure
+	rpcMsg, err := rpc.NewRPCMessageBuilder(
+		utils.NetAddr(s.ListenAddr),
+		s.Codec,
+	).SetMessage(msg).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build rpc message: %w", err)
+	}
+
+	rpcMsgBytes, err := rpcMsg.Bytes(s.Codec)
+	if err != nil {
+		return fmt.Errorf("failed to encode rpc message: %w", err)
+	}
+
 	// send msg to all peers
 	for _, peer := range s.peerMap {
-		if err := s.Transporter.SendMsg(peer, msg); err != nil {
+		if err := s.Transporter.SendMsg(peer, rpcMsgBytes); err != nil {
 			return err
 		}
 	}
@@ -231,4 +263,8 @@ func (s *Server) BroadcastMsg(msg []byte) error {
 
 func (s *Server) Stop() {
 	close(s.quitCh)
+}
+
+func (s *Server) GetCodec() *rpc.Codec {
+	return &s.Codec
 }

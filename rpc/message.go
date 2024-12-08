@@ -12,11 +12,10 @@ const (
 	MessageNewEpoch MessageType = 0x1
 	MessageStatus   MessageType = 0x2
 
-	Observer    MesageTopic = 0x1
-	Reporter    MesageTopic = 0x2
-	Transmittor MesageTopic = 0x3
+	Pacemaker MesageTopic = iota
+	Reporter  MesageTopic = 0x1
 
-	Server      MesageTopic = 0x4
+	Server MesageTopic = 0x4
 )
 
 type Message struct {
@@ -40,10 +39,9 @@ func (m *Message) String() string {
 	return fmt.Sprintf("topic %v, headers %v , data %s ", m.Topic, m.Headers, m.Data)
 }
 
-// Specific Messages
-type NewEpochMsg struct {
-	Current string
-	New     string
+// interface for specific messages
+type ProtocolMsg interface {
+	Bytes(Codec) ([]byte, error)
 }
 
 type StatusMsg struct {

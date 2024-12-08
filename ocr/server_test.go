@@ -15,18 +15,18 @@ func TestRpcBetweenTwoNodes(t *testing.T) {
 	s1Opts := &ServerOpts{
 		ListenAddr: "127.0.0.1:3000",
 		CodecType:  rpc.JsonCodec,
-		privateKey: crypto.GeneratePrivateKey(),
+		PrivateKey: crypto.GeneratePrivateKey(),
 	}
 
-	s1 := NewServer(s1Opts )
+	s1 := NewServer(s1Opts)
 
 	s2Opts := &ServerOpts{
 		ListenAddr: "127.0.0.1:4000",
 		CodecType:  rpc.JsonCodec,
-		privateKey: crypto.GeneratePrivateKey(),
+		PrivateKey: crypto.GeneratePrivateKey(),
 	}
 
-	s2 := NewServer(s2Opts )
+	s2 := NewServer(s2Opts)
 
 	if err := s1.ConnectToPeerNode(utils.NetAddr(s2.ListenAddr)); err != nil {
 		log.Fatalf("failed to connect to peer node: %v", err)
@@ -42,9 +42,8 @@ func TestRpcBetweenTwoNodes(t *testing.T) {
 	assert.NotNil(t, s2.peerMap[s1.id.String()])
 
 	// Construct a NewEpochMsg
-	newEpochMsg := &rpc.NewEpochMsg{
-		New:     "new",
-		Current: "current",
+	newEpochMsg := &rpc.NewEpochMesage{
+		EpochID: 1,
 	}
 
 	rpcMsg, _ := rpc.NewRPCMessageBuilder(
@@ -60,7 +59,7 @@ func TestRpcBetweenTwoNodes(t *testing.T) {
 	log.Printf("public keys of s2 %v \n", s2.ID())
 	log.Printf("peerMap of s1 %+v \n", s1.peerMap)
 	// Send the message
-	if err := s1.SendMsg(s2.ID(), rpcMsg); err != nil {
+	if err := s1.SendMsg(s2.ID().String(), rpcMsg); err != nil {
 		log.Fatalf("failed to send message: %v", err)
 	}
 

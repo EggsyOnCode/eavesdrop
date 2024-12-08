@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -13,6 +14,42 @@ import (
 
 type PrivateKey struct {
 	key *ecdsa.PrivateKey
+}
+
+// ConvertBase64ToECDSAPrivateKey converts a base64 string to *ecdsa.PrivateKey
+func ConvertBase64ToECDSAPrivateKey(base64Key string) (*PrivateKey, error) {
+	// Decode Base64 string
+	keyBytes, err := base64.StdEncoding.DecodeString(base64Key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode Base64 key: %w", err)
+	}
+
+	// Validate key length (32 bytes for secp256r1)
+	if len(keyBytes) != 32 {
+		return nil, fmt.Errorf("invalid key length: expected 32 bytes for secp256r1, got %d", len(keyBytes))
+	}
+
+	// Create the private key scalar (d)
+	d := new(big.Int).SetBytes(keyBytes)
+
+	// Use secp256r1 curve
+	curve := elliptic.P256()
+
+	// Construct the private key
+	privateKey := &ecdsa.PrivateKey{
+		D: d,
+		PublicKey: ecdsa.PublicKey{
+			Curve: curve,
+		},
+	}
+
+	// Derive the public key from the private key
+	privateKey.PublicKey.X, privateKey.PublicKey.Y = curve.ScalarBaseMult(d.Bytes())
+	if privateKey.PublicKey.X == nil || privateKey.PublicKey.Y == nil {
+		return nil, fmt.Errorf("invalid private key: public key coordinates are nil")
+	}
+
+	return &PrivateKey{key: privateKey}, nil
 }
 
 func NewPrivateKeyUsingReader(r io.Reader) *PrivateKey {

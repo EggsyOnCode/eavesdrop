@@ -120,6 +120,10 @@ func (t *TcpTransport) Start() {
 	go t.acceptConn()
 }
 
+func (t *TcpTransport) Stop() error {
+	return t.listener.Close()
+}
+
 // accepting incoming connections on the listener and sending them to the peer channel
 func (t *TcpTransport) acceptConn() {
 	for {
