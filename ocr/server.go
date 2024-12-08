@@ -166,6 +166,7 @@ func (s *Server) sendHandshakeMsgToPeerNode(addr utils.NetAddr) error {
 	rpcMsg, err := rpc.NewRPCMessageBuilder(
 		utils.NetAddr(s.ListenAddr),
 		s.Codec,
+		s.ID().String(),
 	).SetHeaders(
 		rpc.MessageStatus,
 	).SetTopic(
@@ -210,6 +211,7 @@ func (s *Server) SendMsg(id string, msg []byte) error {
 	rpcMsg, err := rpc.NewRPCMessageBuilder(
 		utils.NetAddr(s.ListenAddr),
 		s.Codec,
+		s.id.String(),
 	).SetMessage(msg).Build()
 	if err != nil {
 		return fmt.Errorf("failed to build rpc message: %w", err)
@@ -241,6 +243,7 @@ func (s *Server) BroadcastMsg(msg []byte) error {
 	rpcMsg, err := rpc.NewRPCMessageBuilder(
 		utils.NetAddr(s.ListenAddr),
 		s.Codec,
+		s.ID().String(),
 	).SetMessage(msg).Build()
 	if err != nil {
 		return fmt.Errorf("failed to build rpc message: %w", err)

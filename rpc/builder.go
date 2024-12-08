@@ -7,7 +7,8 @@ import (
 
 // Builder for RPCMessage
 type RPCMessageBuilder struct {
-	from        utils.NetAddr
+	fromSock    utils.NetAddr
+	fromId      string
 	codec       Codec
 	headers     MessageType
 	topic       MesageTopic
@@ -16,10 +17,11 @@ type RPCMessageBuilder struct {
 }
 
 // NewRPCMessageBuilder initializes the builder
-func NewRPCMessageBuilder(from utils.NetAddr, codec Codec) *RPCMessageBuilder {
+func NewRPCMessageBuilder(from utils.NetAddr, codec Codec, fromID string) *RPCMessageBuilder {
 	return &RPCMessageBuilder{
-		from:  from,
-		codec: codec,
+		fromSock: from,
+		fromId:   fromID,
+		codec:    codec,
 	}
 }
 
@@ -74,7 +76,8 @@ func (b *RPCMessageBuilder) Build() (*RPCMessage, error) {
 
 	// Construct the RPCMessage
 	return &RPCMessage{
-		From:    b.from,
+		FromSock:    b.fromSock,
+		FromID:  b.fromId,
 		Payload: msgBytes,
 	}, nil
 }

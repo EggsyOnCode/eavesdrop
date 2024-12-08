@@ -92,7 +92,7 @@ func (p *Pacemaker) ProcessMessage(msg *rpc.DecodedMsg) error {
 	case *rpc.NewEpochMesage:
 		newEMsg := msg.Data.(*rpc.NewEpochMesage)
 
-		rlog.Printf("new epoch msg received.. %+v from %s\n", newEMsg, msg.From)
+		rlog.Printf("new epoch msg received.. %+v from %s\n", newEMsg, msg.FromId)
 	default:
 		rlog.Errorf("RPC Handler: unkown rpc msg header")
 	}

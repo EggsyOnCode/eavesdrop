@@ -207,7 +207,7 @@ func (t *TcpTransport) ListenToPeer(peer *Peer) {
 			panic("error decoding incoing msg")
 		}
 
-		rpcMsg.From = utils.NetAddr(peer.Addr())
+		rpcMsg.FromSock = utils.NetAddr(peer.Addr())
 
 		t.msgCh <- rpcMsg
 	}

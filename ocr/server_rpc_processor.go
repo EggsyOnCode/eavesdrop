@@ -8,8 +8,6 @@ import (
 	"log"
 	"net"
 	"reflect"
-
-	"github.com/romana/rlog"
 )
 
 type ServerRPCProcessor struct {
@@ -32,7 +30,7 @@ func (s *ServerRPCProcessor) ProcessMessage(msg *rpc.DecodedMsg) error {
 		// written from the pov of P2
 		// ctx: we will only recieve status Msgs from a peer from whom we have recently accepted a conn, and who must be in the peerTempMap , we can fetch them suing conn.RemoteAddr
 
-		log.Printf("msg received from %v is %v \n", msg.From, msg)
+		log.Printf("msg received from %v is %v \n", msg.FromSock, msg)
 		log.Printf("message type: %v", reflect.TypeOf(msg.Data))
 		switch msg.Data.(type) {
 		case *rpc.StatusMsg:
@@ -57,7 +55,7 @@ func (s *ServerRPCProcessor) ProcessMessage(msg *rpc.DecodedMsg) error {
 			// fetch peer who sent this statusMsg, from peerMapAddr
 			// node must have received a connection from this peer
 			// therefore this node is labelled as incomingPeer
-			remotePeer, ok := (*s.incomingPeers)[msg.From]
+			remotePeer, ok := (*s.incomingPeers)[msg.FromSock]
 			if !ok {
 				return fmt.Errorf("peer not found during stautus msg reception")
 			}
@@ -66,7 +64,7 @@ func (s *ServerRPCProcessor) ProcessMessage(msg *rpc.DecodedMsg) error {
 			peer.SetReadSock(remotePeer.WriteSock())
 
 			// delete remotePeer from peerMapAddr
-			delete(*s.incomingPeers, msg.From)
+			delete(*s.incomingPeers, msg.FromSock)
 
 			// check if node of ID already exists in peerMap
 			_, ok2 := (*s.peerMap)[statusMsg.Id.String()]
@@ -106,7 +104,6 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 	// 2. switch over the MsgHeaders
 	switch msg.Headers {
 	case rpc.MessageNewEpoch:
-		rlog.Println("we are here....")
 
 		// the msg received is of type NewEpoch
 		newMsg := &rpc.NewEpochMesage{}
@@ -115,9 +112,10 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 			return nil, err
 		}
 		return &rpc.DecodedMsg{
-			From:  rpcMsg.From,
-			Topic: msg.Topic,
-			Data:  newMsg,
+			FromSock: rpcMsg.FromSock,
+			FromId:   rpcMsg.FromID,
+			Topic:    msg.Topic,
+			Data:     newMsg,
 		}, nil
 
 	case rpc.MessageStatus:
@@ -127,9 +125,10 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 			return nil, err
 		}
 		return &rpc.DecodedMsg{
-			From:  rpcMsg.From,
-			Topic: msg.Topic,
-			Data:  newMsg,
+			FromSock: rpcMsg.FromSock,
+			FromId:   rpcMsg.FromID,
+			Topic:    msg.Topic,
+			Data:     newMsg,
 		}, nil
 	default:
 		fmt.Println(msg)

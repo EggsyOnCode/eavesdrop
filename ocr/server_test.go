@@ -49,6 +49,7 @@ func TestRpcBetweenTwoNodes(t *testing.T) {
 	rpcMsg, _ := rpc.NewRPCMessageBuilder(
 		utils.NetAddr(s1.ListenAddr),
 		s1.Codec,
+		s1.id.String(),
 	).SetHeaders(
 		rpc.MessageNewEpoch,
 	).SetTopic(

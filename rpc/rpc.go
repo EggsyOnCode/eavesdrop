@@ -5,15 +5,17 @@ import (
 )
 
 type RPCMessage struct {
-	From    utils.NetAddr `json:"from"`
-	Payload []byte        `json:"payload"`
+	FromSock utils.NetAddr `json:"from_sock"`
+	FromID   string        `json:"from_id"`
+	Payload  []byte        `json:"payload"`
 }
 
 // payload here will be of type Message but in serialized bytes format
-func NewRPCMessage(from utils.NetAddr, payload []byte, ) *RPCMessage {
+func NewRPCMessage(from utils.NetAddr, payload []byte, fromID string) *RPCMessage {
 	return &RPCMessage{
-		From:    from,
-		Payload: payload,
+		FromSock: from,
+		FromID:   fromID,
+		Payload:  payload,
 	}
 }
 
@@ -24,9 +26,10 @@ func (m *RPCMessage) Bytes(codec Codec) ([]byte, error) {
 // after receiving a msg, it must first be decoded by
 // Codec, then passed to RPCProcessor
 type DecodedMsg struct {
-	From  utils.NetAddr
-	Topic MesageTopic
-	Data  any // this can be replaced with a more stricter data type like NewEpochMesage (i.e from message.go)
+	FromSock utils.NetAddr
+	FromId   string
+	Topic    MesageTopic
+	Data     any // this can be replaced with a more stricter data type like NewEpochMesage (i.e from message.go)
 }
 
 // All RPCProcessor i.e. Observer, Reporter etc have to implement this
