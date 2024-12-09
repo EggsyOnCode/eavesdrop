@@ -30,7 +30,7 @@ func (s *ServerRPCProcessor) ProcessMessage(msg *rpc.DecodedMsg) error {
 		// written from the pov of P2
 		// ctx: we will only recieve status Msgs from a peer from whom we have recently accepted a conn, and who must be in the peerTempMap , we can fetch them suing conn.RemoteAddr
 
-		log.Printf("msg received from %v is %v \n", msg.FromSock, msg)
+		log.Printf("msg received from %v is %v \n", msg.FromId, msg)
 		log.Printf("message type: %v", reflect.TypeOf(msg.Data))
 		switch msg.Data.(type) {
 		case *rpc.StatusMsg:
@@ -131,7 +131,6 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 			Data:     newMsg,
 		}, nil
 	default:
-		fmt.Println(msg)
 		return nil, fmt.Errorf("unknown message type: %v", msg.Headers)
 	}
 }

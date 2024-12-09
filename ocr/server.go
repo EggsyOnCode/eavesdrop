@@ -35,6 +35,7 @@ type Server struct {
 	incomingPeers map[utils.NetAddr]*network.Peer // temp peer Maps
 	outgoingPeers map[utils.NetAddr]*network.Peer // temp peer Maps
 	peerMap       map[string]*network.Peer        // map of peers ; key is the public key of the peer
+	peerCountChan chan int                        // channel to keep track of connected peers
 }
 
 func (s *Server) ID() crypto.PublicKey {
@@ -62,6 +63,7 @@ func NewServer(opts *ServerOpts) *Server {
 		peerMap:       make(map[string]*network.Peer),
 		incomingPeers: make(map[utils.NetAddr]*network.Peer),
 		outgoingPeers: make(map[utils.NetAddr]*network.Peer),
+		peerCountChan: make(chan int),
 	}
 
 	// setting server's ID
@@ -80,9 +82,6 @@ func NewServer(opts *ServerOpts) *Server {
 	s.RPCProcessor.incomingPeers = &s.incomingPeers
 	s.RPCProcessor.outgoingPeers = &s.outgoingPeers
 
-	// // TODO: fire off listeners in the server.Start() goroutine
-	// go s.Start()
-
 	return s
 }
 
@@ -93,6 +92,7 @@ func (s *Server) Start() {
 
 	log.Printf("accepting TCP connections on %v", s.ListenAddr)
 	// bootstrap nodes
+	go s.bootstrapNodes()
 
 	// channel listerns; rpc and peer from transport layer
 free:
@@ -199,8 +199,6 @@ func (s *Server) ConnectToPeerNode(addr utils.NetAddr) error {
 		return err
 	}
 
-	fmt.Printf("connected to peer %s", addr)
-
 	return nil
 }
 
@@ -223,8 +221,6 @@ func (s *Server) SendMsg(id string, msg []byte) error {
 	}
 
 	// check if peer exists in peerMap
-	log.Printf("Complete peerMap of s1: %+v\n", s.peerMap)
-	log.Printf("id is : %+v\n", id)
 	idHex, e := crypto.StringToPublicKey(id)
 	if e != nil {
 		return e
@@ -233,6 +229,8 @@ func (s *Server) SendMsg(id string, msg []byte) error {
 	if !ok {
 		return fmt.Errorf("peer not found")
 	}
+
+	rlog.Infof("sent msg to peer %v", peer.Addr())
 
 	return s.Transporter.SendMsg(peer, rpcMsgBytes)
 }
@@ -270,4 +268,39 @@ func (s *Server) Stop() {
 
 func (s *Server) GetCodec() *rpc.Codec {
 	return &s.Codec
+}
+
+func (s *Server) GetPeerCount() int {
+	return len(s.peerMap)
+}
+
+func (s *Server) bootstrapNodes() {
+	peers, err := NewJsonConfigReader("peers.json").GetPeerInfo()
+	if err != nil {
+		log.Fatalf("failed to read peers: %v", err)
+	}
+
+	connected := 0
+	// Iterate over peers and connect
+	rlog.Printf("Connecting to %+v peers\n", (peers))
+	rlog.Printf("Server ID: %s\n", s.ID().String())
+	for _, peer := range peers {
+		if peer.PublicKey == s.ID().String() {
+			// Skip the server's own entry
+			continue
+		}
+
+		if err := s.ConnectToPeerNode(utils.NetAddr(peer.ListenAddr)); err != nil {
+			rlog.Errorf("failed to connect to peer at %s: %v", peer.ListenAddr, err)
+			continue
+		}
+
+		connected++
+
+		rlog.Infof("Connected to peer: %s\n", peer.PublicKey)
+	}
+
+	// send connected peers count to peerCountChan
+	// which is used by the OCR to keep track of connected peers
+	s.peerCountChan <- connected
 }

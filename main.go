@@ -48,8 +48,9 @@ func connectToPeers(server *ocr.Server, fileName string) error {
 }
 
 func main() {
+	// gen_keys()
 	// The base64-encoded private key string
-	pk1, err := crypto.ConvertBase64ToECDSAPrivateKey("sbpDUYMoUvsFtAPqiqX2CodnacniduVdXUV3S1C1fVQ=")
+	pk1, err := crypto.HexToPrivKey("96ec582ce4da3ac668a5b7b6a44204d9d469673a9f03d1ae16179b938f78acdb")
 	if err != nil {
 		log.Fatalf("Failed to decode private key: %v", err)
 	}
@@ -62,7 +63,7 @@ func main() {
 
 	s1 := ocr.NewServer(s1Opts)
 
-	pk2, err := crypto.ConvertBase64ToECDSAPrivateKey("233JIT8rHgx4dxYpeOX9dy3pITUB4GkzfqZEuR+HR5U=")
+	pk2, err := crypto.HexToPrivKey("c08041b8055826f19b8fda00b929ba17b517a736cf37beaf504c11db77d356f0")
 	if err != nil {
 		log.Fatalf("Failed to decode private key: %v", err)
 	}
@@ -89,17 +90,18 @@ func main() {
 	go ocr2.Start() // s2 would also be init rn
 
 	time.Sleep(1 * time.Second)
-	// connect peers
-	if err := connectToPeers(s1, "peers.json"); err != nil {
-		log.Fatalf("Failed to connect to peers: %v", err)
-	}
-
-	if err := connectToPeers(s2, "peers.json"); err != nil {
-		log.Fatalf("Failed to connect to peers: %v", err)
-	}
 
 	defer ocr1.Stop()
 	defer ocr2.Stop()
 
 	select {}
+}
+
+func gen_keys() {
+	err := crypto.GenerateKeyPairsJSON(2, "peers.json")
+	if err != nil {
+		log.Fatalf("Error generating key pairs: %v", err)
+	}
+
+	fmt.Println("Key pairs generated successfully and saved to keys.json")
 }

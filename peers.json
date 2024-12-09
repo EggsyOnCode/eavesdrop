@@ -1,12 +1,12 @@
 [
   {
-    "privateKey": "gcovFMr5oTFJBq9Egg5p2EKH2oZfkTGsk2zCBH8KMaQ=",
-    "publicKey": "BGKgXbrGyTGfCtpQMyC33/Dt2O0yyMi9NLFQdAyf9p2xBqWpW4H7uNp6gEbUjfhtRJWLHx0+FXLX0k5JNyuB3Pc=",
+    "privateKey": "96ec582ce4da3ac668a5b7b6a44204d9d469673a9f03d1ae16179b938f78acdb",
+    "publicKey": "02451760d2e1ae3294fdc1d611e22178a65dd559e87243af170a2ea9555744dbe2",
     "listenAddr": "127.0.0.1:4001"
   },
   {
-    "privateKey": "jp0g/bC2Z42W6p8Bh/iFHUeepGUNrHGL5AxcEzilxx4=",
-    "publicKey": "BPK6oUDj08WEJW4wFpINVjKY99Sbl/nV5VMaIzQM//XHocu7ihwNhxT1DW+SziytKHjwScMnO9libDQxC7lKy9Q=",
+    "privateKey": "c08041b8055826f19b8fda00b929ba17b517a736cf37beaf504c11db77d356f0",
+    "publicKey": "02ec73b0d4f338988fd7cd9f0155a5b5caee2335a703010dad02dd3802cb53b4e4",
     "listenAddr": "127.0.0.1:4002"
   }
 ]

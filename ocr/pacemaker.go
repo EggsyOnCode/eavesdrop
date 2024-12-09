@@ -26,6 +26,7 @@ type Pacemaker struct {
 	TimerResend   *Timer
 	TimerProgress *Timer
 	quitCh        chan struct{}
+	ocrCtx        *OCRCtx
 }
 
 func NewPaceMaker() *Pacemaker {
@@ -37,6 +38,10 @@ func NewPaceMaker() *Pacemaker {
 		TimerProgress: NewTimer(10),
 		quitCh:        make(chan struct{}),
 	}
+}
+
+func (p *Pacemaker) SetOCRContext(ctx *OCRCtx) {
+	p.ocrCtx = ctx
 }
 
 // if sending Scheme is BROADCAST, send message to all oracles
@@ -93,6 +98,7 @@ func (p *Pacemaker) ProcessMessage(msg *rpc.DecodedMsg) error {
 		newEMsg := msg.Data.(*rpc.NewEpochMesage)
 
 		rlog.Printf("new epoch msg received.. %+v from %s\n", newEMsg, msg.FromId)
+		rlog.Printf("connected node count is : %v\n", p.ocrCtx.PeerCount)
 	default:
 		rlog.Errorf("RPC Handler: unkown rpc msg header")
 	}

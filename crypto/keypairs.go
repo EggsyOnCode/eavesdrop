@@ -10,13 +10,17 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/secp256k1"
+	"github.com/romana/rlog"
 )
 
 type PrivateKey struct {
 	key *ecdsa.PrivateKey
 }
 
-// ConvertBase64ToECDSAPrivateKey converts a base64 string to *ecdsa.PrivateKey
+// ConvertBase64ToECDSAPrivateKey converts a base64 string to *ecdsa.PrivateKey using secp256k1.
 func ConvertBase64ToECDSAPrivateKey(base64Key string) (*PrivateKey, error) {
 	// Decode Base64 string
 	keyBytes, err := base64.StdEncoding.DecodeString(base64Key)
@@ -24,16 +28,16 @@ func ConvertBase64ToECDSAPrivateKey(base64Key string) (*PrivateKey, error) {
 		return nil, fmt.Errorf("failed to decode Base64 key: %w", err)
 	}
 
-	// Validate key length (32 bytes for secp256r1)
+	// Validate key length (32 bytes for secp256k1)
 	if len(keyBytes) != 32 {
-		return nil, fmt.Errorf("invalid key length: expected 32 bytes for secp256r1, got %d", len(keyBytes))
+		return nil, fmt.Errorf("invalid key length: expected 32 bytes for secp256k1, got %d", len(keyBytes))
 	}
 
 	// Create the private key scalar (d)
 	d := new(big.Int).SetBytes(keyBytes)
 
-	// Use secp256r1 curve
-	curve := elliptic.P256()
+	// Use secp256k1 curve
+	curve := secp256k1.S256()
 
 	// Construct the private key
 	privateKey := &ecdsa.PrivateKey{
@@ -52,8 +56,16 @@ func ConvertBase64ToECDSAPrivateKey(base64Key string) (*PrivateKey, error) {
 	return &PrivateKey{key: privateKey}, nil
 }
 
+func HexToPrivKey(hexKey string) (*PrivateKey, error) {
+	pk, err := crypto.HexToECDSA(hexKey)
+	if err != nil {
+		return nil, err
+	}
+	return &PrivateKey{key: pk}, nil
+}
+
 func NewPrivateKeyUsingReader(r io.Reader) *PrivateKey {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), r)
+	key, err := ecdsa.GenerateKey(secp256k1.S256(), r)
 	if err != nil {
 		panic(err)
 	}
@@ -67,6 +79,15 @@ func GeneratePrivateKey() *PrivateKey {
 	return NewPrivateKeyUsingReader(rand.Reader)
 }
 
+type PublicKey []byte
+
+func (p *PrivateKey) PublicKey() PublicKey {
+	rlog.Infof("private key: %x", p.key.D.Bytes())
+	pk := crypto.CompressPubkey(&p.key.PublicKey)
+	rlog.Infof("public key: %x", pk)
+	return pk
+}
+
 // msg are signed with PrivateKey
 func (p *PrivateKey) Sign(data []byte) (*Signature, error) {
 
@@ -76,12 +97,6 @@ func (p *PrivateKey) Sign(data []byte) (*Signature, error) {
 	}
 
 	return &Signature{R: r, S: s}, nil
-}
-
-type PublicKey []byte
-
-func (p *PrivateKey) PublicKey() PublicKey {
-	return elliptic.MarshalCompressed(elliptic.P256(), p.key.X, p.key.Y)
 }
 
 func StringToPublicKey(hexString string) (PublicKey, error) {

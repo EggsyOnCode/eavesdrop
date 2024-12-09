@@ -76,9 +76,9 @@ func (b *RPCMessageBuilder) Build() (*RPCMessage, error) {
 
 	// Construct the RPCMessage
 	return &RPCMessage{
-		FromSock:    b.fromSock,
-		FromID:  b.fromId,
-		Payload: msgBytes,
+		FromSock: b.fromSock,
+		FromID:   b.fromId,
+		Payload:  msgBytes,
 	}, nil
 }
 

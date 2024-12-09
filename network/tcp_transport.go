@@ -226,16 +226,10 @@ func (t *TcpTransport) ConsumeMsgs() <-chan *rpc.RPCMessage {
 // Sending msg to a peer
 func (t *TcpTransport) SendMsg(peer *Peer, msg []byte) error {
 	// no need to check existence, is ensured by Server
-
-	// Log the peer and the message to be sent
-	log.Printf("Sending message to peer %s: %s", peer.Addr(), msg)
-
 	_, err := peer.writeSock.Write(msg)
 	if err != nil {
 		log.Printf("Error writing message to peer: %v", err)
 	}
-
-	log.Printf("msg sent to peer %s: %s", peer.Addr(), msg)
 
 	return err
 }
