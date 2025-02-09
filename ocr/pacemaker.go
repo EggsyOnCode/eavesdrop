@@ -18,6 +18,12 @@ const (
 	ResendTimems time.Duration = time.Second * 3
 )
 
+type EpochStats struct {
+	f             int
+	n             int
+	epochMsgCount int
+}
+
 type Pacemaker struct {
 	currEpoch     uint64            // currEpoch
 	highestEpoch  int               // highest epoch number sent in NEWEPOCH message
@@ -27,6 +33,7 @@ type Pacemaker struct {
 	TimerProgress *Timer
 	quitCh        chan struct{}
 	ocrCtx        *OCRCtx
+	currEpochStat *EpochStats
 }
 
 func NewPaceMaker() *Pacemaker {
@@ -37,6 +44,7 @@ func NewPaceMaker() *Pacemaker {
 		TimerResend:   NewTimer(time.Duration(ResendTimems)),
 		TimerProgress: NewTimer(10),
 		quitCh:        make(chan struct{}),
+		currEpochStat: &EpochStats{},
 	}
 }
 
@@ -99,9 +107,45 @@ func (p *Pacemaker) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 		rlog.Printf("new epoch msg received.. %+v from %s\n", newEMsg, msg.FromId)
 		rlog.Printf("connected node count is : %v\n", p.ocrCtx.PeerCount)
+		rlog.Printf("faulty node count is : %v\n", p.ocrCtx.FaultyCount)
 	default:
-		rlog.Errorf("RPC Handler: unkown rpc msg header")
+		rlog.Errorf("RPC Handler: unkown rpc msg type")
 	}
 
 	return nil
+}
+
+func (p *Pacemaker) processNewEpochMsg(msg *rpc.DecodedMsg) {
+	newEMsg := msg.Data.(*rpc.NewEpochMesage)
+	rlog.Infof("new epoch msg receiveed %v from %s\n", newEMsg, msg.FromId)
+
+	// inc the newEpochMsg count
+	p.currEpochStat.epochMsgCount++
+
+	// if the msg count is greater than or eq to f+1 ,
+	// update local epoch number to (f+1)-highestEpoch
+	// broadcast NEWEPOCH message with this new epoch number
+	f := p.ocrCtx.FaultyCount
+	if p.currEpochStat.epochMsgCount >= f+1 {
+		p.currEpoch = uint64(f + 1 - p.highestEpoch)
+		go p.SendNewEpochMsg()
+		rlog.Println("NEWEPOCH message sent after f+1 msgs")
+	}
+}
+
+// wrapper on common functions
+func (p *Pacemaker) SendNewEpochMsg() {
+	// Broadcast NEWEPOCH message
+	payload := &rpc.NewEpochMesage{
+		EpochID: p.currEpoch,
+	}
+	msg, err := rpc.NewMessageBuilder(
+		*p.msgService.GetCodec(),
+	).SetHeaders(rpc.MessageNewEpoch).SetTopic(rpc.Pacemaker).SetData(payload).Bytes()
+
+	if err != nil {
+		panic(err)
+	}
+
+	p.msgService.BroadcastMsg(msg)
 }

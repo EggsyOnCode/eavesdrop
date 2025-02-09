@@ -3,6 +3,7 @@ package ocr
 import (
 	"eavesdrop/rpc"
 	"fmt"
+	"math"
 )
 
 // context of an OCR node
@@ -42,7 +43,9 @@ func (o *OCR) Start() error {
 		// Wait for the server to report connected peers
 		peerCount := <-o.Server.peerCountChan
 		o.ctx.PeerCount = peerCount
-		o.ctx.FaultyCount = (peerCount - 1) / 3
+		faultyC := float32(((peerCount - 1) / 3))
+		o.ctx.FaultyCount = int(math.Ceil(float64(faultyC)))
+
 		close(o.peerCountInit) // Signal that the context is ready
 	}()
 
