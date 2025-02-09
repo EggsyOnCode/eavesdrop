@@ -13,7 +13,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/secp256k1"
-	"github.com/romana/rlog"
 )
 
 type PrivateKey struct {
@@ -82,9 +81,7 @@ func GeneratePrivateKey() *PrivateKey {
 type PublicKey []byte
 
 func (p *PrivateKey) PublicKey() PublicKey {
-	rlog.Infof("private key: %x", p.key.D.Bytes())
 	pk := crypto.CompressPubkey(&p.key.PublicKey)
-	rlog.Infof("public key: %x", pk)
 	return pk
 }
 

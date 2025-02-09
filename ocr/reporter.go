@@ -16,7 +16,7 @@ type GeneralState struct {
 
 type LeaderState struct {
 	currRound         int           // current round for leader
-	observations      []Observation // signed observations received in OBSERVE messages
+	// observations      []Observation // signed observations received in OBSERVE messages
 	reports           []Report      // attested reports received in REPORT messages
 	TimerRoundTimeout *Timer        // timer Tround with timeout duration ∆round , initially stopped
 	TimerGrace        *Timer        // timer Tgrace with timeout duration ∆grace , initially stopped
@@ -39,7 +39,7 @@ func NewReportingEngine() *ReportingEngine {
 		},
 		LeaderState: LeaderState{
 			currRound:         0,
-			observations:      make([]Observation, MAX_ROUNDS),
+			// observations:      make([]Observation, MAX_ROUNDS),
 			reports:           make([]Report, MAX_ROUNDS),
 			TimerRoundTimeout: NewTimer(10),
 			TimerGrace:        NewTimer(10),
@@ -70,4 +70,8 @@ func (r *ReportingEngine) Start() {
 
 func (r *ReportingEngine) ProcessMessage(*rpc.DecodedMsg) error {
 	return nil
+}
+
+func (r *ReportingEngine) Stop() {
+	// stop the reporting engine
 }

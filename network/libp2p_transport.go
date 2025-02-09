@@ -10,7 +10,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"sync"
 	"time"
 
@@ -71,8 +70,10 @@ func (lt *LibP2pTransport) Start() {
 	}
 	lt.host = host
 
+	// Modify logger to include the server's ID in every log entry
+	lt.logger = lt.logger.With("server_id", host.ID().String())
+
 	lt.logger.Info("Host with ID", host.ID().String(), " listen Addr", host.Addrs())
-	log.Printf("channel of transport is %v \n", lt.peerCh)
 
 	// attach handlers for reading / writing when peer connects
 	host.SetStreamHandler(protocolID, lt.handleStream)
@@ -172,9 +173,6 @@ func (lt *LibP2pTransport) DiscoverPeers() {
 // this msg is exposed to the caller, for sending msg to a particular peer
 func (lt *LibP2pTransport) SendMsg(id string, data []byte) error {
 
-	log.Printf("inside sending msg to peer %v \n", id)
-	log.Printf("no of connected peers %v \n", lt.host.Peerstore().Peers().String())
-
 	pID, err := peer.Decode(id)
 	if err != nil {
 		lt.logger.Error("Invalid peer ID:", err)
@@ -226,7 +224,7 @@ type discoveryNotifee struct {
 
 // Called when a new peer is discovered
 func (d *discoveryNotifee) HandlePeerFound(p peer.AddrInfo) {
-	fmt.Println("Discovered a new peer:", p.ID)
+	logger.Get().Sugar().Info("Discovered a new peer:", p.ID)
 	// DIRTY solution: adding a random delay of upto 2sec to avoid the TCP simulatenous connect error
 	time.Sleep(getPeerDelay(p.ID))
 
@@ -240,7 +238,6 @@ func (d *discoveryNotifee) HandlePeerFound(p peer.AddrInfo) {
 	peer := NewPeer(p.ID.String(), p.Addrs[0].String())
 	d.mu.Lock()
 	d.peerCh <- peer
-	log.Printf("sent to channel %v  channel is %v \n", peer, d.peerCh)
 	d.mu.Unlock()
 }
 

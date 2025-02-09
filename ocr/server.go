@@ -7,7 +7,6 @@ import (
 	"eavesdrop/rpc"
 	"eavesdrop/utils"
 	"fmt"
-	"log"
 	"sync"
 
 	g "github.com/zyedidia/generic"
@@ -57,6 +56,7 @@ func NewServer(opts *ServerOpts) *Server {
 		logger:   logger.Get().Sugar(),
 	}
 
+
 	s := &Server{
 		Transporter:   transporter,
 		RPCProcessor:  rpcProcessor,
@@ -65,9 +65,10 @@ func NewServer(opts *ServerOpts) *Server {
 		ServerOpts:    opts,
 		quitCh:        make(chan struct{}),
 		peers:         avl.New[string, *ProtcolPeer](g.Greater[string]),
-		logger:        logger.Get().Sugar(),
 		peerCountChan: make(chan int),
 	}
+
+	s.logger = logger.Get().Sugar().With("server_id", s.id)
 
 	// setting server's ID
 	s.id = s.PrivateKey.PublicKey()
@@ -105,7 +106,6 @@ free:
 			pPeer := &ProtcolPeer{peer}
 			s.peers.Put(peer.ID, pPeer)
 			// s.peerCountChan <- s.peers.Size() (TODO: some issue here)
-			log.Print("got another peer")
 
 			// send StatusMsg to peer
 			s.sendHandshakeMsgToPeerNode(peer.ID)
@@ -113,7 +113,6 @@ free:
 			s.peerLock.Unlock()
 
 		case rpcMsg := <-s.Transporter.ConsumeMsgs():
-			log.Printf("hello...")
 			msg, err := s.RPCProcessor.DefaultRPCDecoder(rpcMsg, s.Codec)
 			if err != nil {
 				s.logger.Errorf("error decoding %v \n", err)
@@ -128,7 +127,7 @@ free:
 			break free
 		}
 	}
-	log.Printf("server stopped")
+	s.logger.Info("server stopped")
 }
 
 // addr is that of the peer; only if its found in the peerMap
@@ -151,8 +150,6 @@ func (s *Server) sendHandshakeMsgToPeerNode(id string) error {
 	if err != nil {
 		return err
 	}
-
-	log.Printf("sending msg to peer")
 
 	return s.Transporter.SendMsg(id, rpcMsg)
 }

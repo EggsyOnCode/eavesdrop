@@ -2,10 +2,11 @@ package ocr
 
 import (
 	"eavesdrop/crypto"
+	"eavesdrop/logger"
 	"eavesdrop/rpc"
 	"time"
 
-	"github.com/romana/rlog"
+	"go.uber.org/zap"
 )
 
 type SendingSchme int
@@ -15,18 +16,26 @@ const (
 	LEADER    SendingSchme = 1
 	PEER      SendingSchme = 2
 
-	ResendTimems time.Duration = time.Second * 3
+	ResendTimes  time.Duration = time.Second * 3
+	ProgressTime time.Duration = time.Second * 20
+)
+
+var (
+	secretKey []byte = []byte("secretvalue")
 )
 
 type EpochStats struct {
-	f             int
-	n             int
-	epochMsgCount int
+	f  uint64 // faluty nodes
+	n  uint64 // total peers
+	ne uint64 // highest epoch number received
+	e  uint64 // current epoch number
+
+	// cache
+	n_e0  uint64 // no of times e0 > e has been recorded
+	new_e uint64 // e^ = f + 1 - ne
 }
 
 type Pacemaker struct {
-	currEpoch     uint64            // currEpoch
-	highestEpoch  int               // highest epoch number sent in NEWEPOCH message
 	leader        *crypto.PublicKey // current leader
 	msgService    MessagingLayer
 	TimerResend   *Timer
@@ -34,22 +43,32 @@ type Pacemaker struct {
 	quitCh        chan struct{}
 	ocrCtx        *OCRCtx
 	currEpochStat *EpochStats
+
+	Reporter *ReportingEngine // ephemeral existence (can be destroyed / restarted)
+	server   *Server
+	ocrCh    chan *rpc.PacemakerMessage // used to comm with OCR
+	logger   *zap.SugaredLogger
 }
 
-func NewPaceMaker() *Pacemaker {
+func NewPaceMaker(s *Server, ocrCh chan *rpc.PacemakerMessage) *Pacemaker {
 	return &Pacemaker{
-		currEpoch:     1,
-		highestEpoch:  0,
 		leader:        nil,
-		TimerResend:   NewTimer(time.Duration(ResendTimems)),
-		TimerProgress: NewTimer(10),
+		TimerResend:   NewTimer(time.Duration(ResendTimes)),
+		TimerProgress: NewTimer(time.Duration(ProgressTime)),
 		quitCh:        make(chan struct{}),
 		currEpochStat: &EpochStats{},
+		server:        s,
+		ocrCh:         ocrCh,
+		logger:        logger.Get().Sugar(),
 	}
 }
 
 func (p *Pacemaker) SetOCRContext(ctx *OCRCtx) {
 	p.ocrCtx = ctx
+
+	// when init current epoch stats are same as OCR context
+	p.currEpochStat.f = uint64(ctx.FaultyCount)
+	p.currEpochStat.n = uint64(ctx.PeerCount)
 }
 
 // if sending Scheme is BROADCAST, send message to all oracles
@@ -78,7 +97,7 @@ func (p *Pacemaker) Start() {
 			case <-p.TimerResend.Subscribe():
 				// Broadcast NEWEPOCH message
 				payload := &rpc.NewEpochMesage{
-					EpochID: p.currEpoch,
+					EpochID: p.currEpochStat.e,
 				}
 				msg, err := rpc.NewMessageBuilder(
 					*p.msgService.GetCodec(),
@@ -89,15 +108,28 @@ func (p *Pacemaker) Start() {
 				}
 
 				p.msgService.BroadcastMsg(msg)
-				rlog.Println("NEWEPOCH message sent")
+				p.logger.Info("PACEMAKER: NEWEPOCH message sent")
+
+			case <-p.TimerProgress.Subscribe():
+				// if no progress has been made (this can be quanitfied from signals coming from)
+				// the reporting engine; then the leader is considered faulty
+				// change epoch and suspend current reporting engine
 
 			case <-p.quitCh: // Add a quit channel for graceful shutdown
-				rlog.Println("Pacemaker stopped")
+				p.logger.Info("PACEMAKER: stopped")
 				return
 			}
 		}
 	}()
 
+	// select a leader
+	leader := findLeader(int(p.currEpochStat.e), secretKey, p.server.peers)
+	// update teh ocr staet accordingly
+	if leader.ID == p.ocrCtx.ID {
+		p.upateOCRState(rpc.LEADING)
+	} else {
+		p.upateOCRState(rpc.FOLLOWING)
+	}
 }
 
 func (p *Pacemaker) ProcessMessage(msg *rpc.DecodedMsg) error {
@@ -105,11 +137,13 @@ func (p *Pacemaker) ProcessMessage(msg *rpc.DecodedMsg) error {
 	case *rpc.NewEpochMesage:
 		newEMsg := msg.Data.(*rpc.NewEpochMesage)
 
-		rlog.Printf("new epoch msg received.. %+v from %s\n", newEMsg, msg.FromId)
-		rlog.Printf("connected node count is : %v\n", p.ocrCtx.PeerCount)
-		rlog.Printf("faulty node count is : %v\n", p.ocrCtx.FaultyCount)
+		p.logger.Infof("PACEMAKER : new epoch msg received.. %+v from %s\n", newEMsg, msg.FromId)
+		p.logger.Infof("PACEMAKER : connected node count is : %v\n", p.ocrCtx.PeerCount)
+		p.logger.Infof("PACEMAKER : faulty node count is : %v\n", p.ocrCtx.FaultyCount)
+
+		p.processNewEpochMsg(msg)
 	default:
-		rlog.Errorf("RPC Handler: unkown rpc msg type")
+		p.logger.Errorf("PACEMAKER RPC Handler: unkown rpc msg type")
 	}
 
 	return nil
@@ -117,27 +151,35 @@ func (p *Pacemaker) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 func (p *Pacemaker) processNewEpochMsg(msg *rpc.DecodedMsg) {
 	newEMsg := msg.Data.(*rpc.NewEpochMesage)
-	rlog.Infof("new epoch msg receiveed %v from %s\n", newEMsg, msg.FromId)
+	e0 := newEMsg.EpochID
+	f := p.currEpochStat.f
 
-	// inc the newEpochMsg count
-	p.currEpochStat.epochMsgCount++
+	if e0 > p.currEpochStat.e {
+		p.currEpochStat.ne = e0 // update highest recorded e
+		p.currEpochStat.n_e0++
 
-	// if the msg count is greater than or eq to f+1 ,
-	// update local epoch number to (f+1)-highestEpoch
-	// broadcast NEWEPOCH message with this new epoch number
-	f := p.ocrCtx.FaultyCount
-	if p.currEpochStat.epochMsgCount >= f+1 {
-		p.currEpoch = uint64(f + 1 - p.highestEpoch)
-		go p.SendNewEpochMsg()
-		rlog.Println("NEWEPOCH message sent after f+1 msgs")
+		if p.currEpochStat.n_e0 > f {
+			newEpoch := uint64(f + 1 - p.currEpochStat.ne)
+			p.currEpochStat.new_e = newEpoch
+			// broadcast it
+			go p.SendNewEpochMsg()
+		} else if p.currEpochStat.n_e0 > 2*f {
+			// suspend current RE
+			// update current epoch to new epoch which is
+			// (2f+1) - ne
+			// start new RE
+			p.switchToNewEpoch()
+		}
 	}
+
+	// ignore
 }
 
 // wrapper on common functions
 func (p *Pacemaker) SendNewEpochMsg() {
 	// Broadcast NEWEPOCH message
 	payload := &rpc.NewEpochMesage{
-		EpochID: p.currEpoch,
+		EpochID: p.currEpochStat.e,
 	}
 	msg, err := rpc.NewMessageBuilder(
 		*p.msgService.GetCodec(),
@@ -148,4 +190,25 @@ func (p *Pacemaker) SendNewEpochMsg() {
 	}
 
 	p.msgService.BroadcastMsg(msg)
+}
+
+func (p *Pacemaker) upateOCRState(s rpc.OCRState) {
+	paceMakerMsg := &rpc.PacemakerMessage{
+		Data: s,
+	}
+
+	p.ocrCh <- paceMakerMsg
+}
+
+func (p *Pacemaker) switchToNewEpoch() {
+	// update current epoch
+	f := p.currEpochStat.f
+	p.currEpochStat.e = (2*f + 1) - p.currEpochStat.ne
+	p.currEpochStat.n_e0 = 0
+	p.currEpochStat.new_e = 0
+
+	p.Reporter.Stop()
+	// TODO: start a new one
+
+	p.logger.Infof("PACEMAKER: switched to new epoch %v\n", p.currEpochStat.e)
 }
