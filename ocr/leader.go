@@ -3,6 +3,7 @@ package ocr
 import (
 	"eavesdrop/rpc"
 	"eavesdrop/utils"
+	"time"
 )
 
 type LeaderPhase byte
@@ -15,14 +16,14 @@ const (
 	PhaseFinal   LeaderPhase = 0x3
 )
 
-type Observation struct{}
+type Observation []byte
 
 type LeaderState struct {
-	observations      []Observation // signed observations received in OBSERVE messages
-	reports           []Report      // attested reports received in REPORT messages
-	TimerRoundTimeout *Timer        // timer Tround with timeout duration ∆round , initially stopped
-	TimerGrace        *Timer        // timer Tgrace with timeout duration ∆grace , initially stopped
-	Phase             LeaderPhase   // current phase of the leader
+	observations      map[string]Observation // signed observations received in OBSERVE messages
+	reports           []Report               // attested reports received in REPORT messages
+	TimerRoundTimeout *Timer                 // timer Tround with timeout duration ∆round , initially stopped
+	TimerGrace        *Timer                 // timer Tgrace with timeout duration ∆grace , initially stopped
+	Phase             LeaderPhase            // current phase of the leader
 	phaseCh           chan LeaderPhase
 }
 
@@ -70,6 +71,13 @@ func (re *ReportingEngine) handleGrace() {
 	// handle the GRACE phase
 	// will have to listen to the GRACE messages from the leader
 	// and update the state accordingly
+	time.AfterFunc(RoundGrace, func() {
+		re.logger.Infof("RE: GRACE phase ended, proceeding to next step...")
+
+		re.Phase = PhaseReport
+		re.LeaderState.phaseCh <- PhaseReport
+	})
+
 }
 
 func (re *ReportingEngine) handleReport() {

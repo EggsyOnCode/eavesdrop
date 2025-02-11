@@ -76,7 +76,7 @@ func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info Serve
 			receivedEcho:   make([]bool, 1),
 		},
 		LeaderState: LeaderState{
-			observations: make([]Observation, 1), // init of size 1, we can extend it in future
+			observations: map[string]Observation{}, // init of size 1, we can extend it in future
 			reports:      make([]Report, 1),
 			// TimerRoundTimeout: NewTimer(RoundTmeout),
 			TimerRoundTimeout: &Timer{},
@@ -124,7 +124,7 @@ func (re *ReportingEngine) Start() {
 	}
 
 free:
-	// we need timers for round expiry here
+	//TODO: we need timers for round expiry here
 	for {
 		select {
 		case <-re.quitCh:
@@ -267,11 +267,20 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 		return nil
 
 	case rpc.ObserveResp:
+		observation := msg.Data.(rpc.ObserveResp)
+		if (observation.Round == uint64(re.curRound)) && (observation.Epoch == re.epoch) {
+			// update the cache layer
+			re.cacheLayer.observe_n++
+			// add observations to the state
+			re.observations[msg.FromId] = observation.Response
 
-		// logic
+			if re.cacheLayer.observe_n > 2*re.pacemakerGlobals.f+1 {
+				re.Phase = PhaseGrace
+				re.LeaderState.phaseCh <- PhaseGrace
+			}
+		}
 
 		return nil
-
 
 	default:
 		re.logger.Errorf("RE: unknown message type: %v", reflect.TypeOf(msg.Data))
