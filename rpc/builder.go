@@ -13,6 +13,7 @@ type RPCMessageBuilder struct {
 	headers     MessageType
 	topic       MesageTopic
 	payloadData interface{} // Generic payload (e.g., StatusMsg, NewEpochMsg, etc.)
+	signature   []byte
 	message     []byte
 }
 
@@ -40,6 +41,11 @@ func (b *RPCMessageBuilder) SetTopic(topic MesageTopic) *RPCMessageBuilder {
 // SetPayload sets the specific payload (e.g., StatusMsg, NewEpochMsg, etc.)
 func (b *RPCMessageBuilder) SetPayload(payload interface{}) *RPCMessageBuilder {
 	b.payloadData = payload
+	return b
+}
+
+func (b *RPCMessageBuilder) SetSignature(sign []byte) *RPCMessageBuilder {
+	b.signature = sign
 	return b
 }
 
@@ -76,8 +82,9 @@ func (b *RPCMessageBuilder) Build() (*RPCMessage, error) {
 
 	// Construct the RPCMessage
 	return &RPCMessage{
-		FromID:   b.fromId,
-		Payload:  msgBytes,
+		FromID:    b.fromId,
+		Payload:   msgBytes,
+		Signature: b.signature,
 	}, nil
 }
 

@@ -5,15 +5,16 @@ import (
 )
 
 type RPCMessage struct {
-	FromID   string        `json:"from_id"`
-	Payload  []byte        `json:"payload"`
+	FromID    string `json:"from_id"`
+	Payload   []byte `json:"payload"`
+	Signature []byte `json:"signature"`
 }
 
 // payload here will be of type Message but in serialized bytes format
 func NewRPCMessage(from utils.NetAddr, payload []byte, fromID string) *RPCMessage {
 	return &RPCMessage{
-		FromID:   fromID,
-		Payload:  payload,
+		FromID:  fromID,
+		Payload: payload,
 	}
 }
 

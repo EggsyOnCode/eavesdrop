@@ -48,18 +48,25 @@ type Pacemaker struct {
 	server   *Server
 	ocrCh    chan *rpc.PacemakerMessage // used to comm with OCR
 	logger   *zap.SugaredLogger
+
+	signer *crypto.PrivateKey // we need it to sign msgs, also derive ID
 }
 
-func NewPaceMaker(s *Server, ocrCh chan *rpc.PacemakerMessage) *Pacemaker {
+func NewPaceMaker(s *Server, ocrCh chan *rpc.PacemakerMessage, signer *crypto.PrivateKey) *Pacemaker {
 	return &Pacemaker{
-		leader:        nil,
-		TimerResend:   NewTimer(time.Duration(ResendTimes)),
-		TimerProgress: NewTimer(time.Duration(ProgressTime)),
+		leader: nil,
+		// TODO: don't init the timer right here since it would start
+		// ticking immediately, do it when it needs to
+		// TimerResend:   NewTimer(time.Duration(ResendTimes)),
+		TimerResend: &Timer{},
+		// TimerProgress: NewTimer(time.Duration(ProgressTime)),
+		TimerProgress: &Timer{},
 		quitCh:        make(chan struct{}),
 		currEpochStat: &EpochStats{},
 		server:        s,
 		ocrCh:         ocrCh,
 		logger:        logger.Get().Sugar(),
+		signer:        signer,
 	}
 }
 

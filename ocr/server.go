@@ -56,7 +56,6 @@ func NewServer(opts *ServerOpts) *Server {
 		logger:   logger.Get().Sugar(),
 	}
 
-
 	s := &Server{
 		Transporter:   transporter,
 		RPCProcessor:  rpcProcessor,
@@ -136,6 +135,7 @@ func (s *Server) sendHandshakeMsgToPeerNode(id string) error {
 		Id:         s.ID(),
 		ListenAddr: string(s.Transporter.Addr()),
 	}
+
 	// constructing msg
 	rpcMsg, err := rpc.NewRPCMessageBuilder(
 		utils.NetAddr(s.ListenAddr),

@@ -2,8 +2,16 @@ package ocr
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/sha256"
 	"eavesdrop/rpc"
+	"eavesdrop/utils"
+	"fmt"
+	"reflect"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -13,6 +21,25 @@ const (
 	RoundGrace  time.Duration = time.Second * 5
 )
 
+// info about the server (p2p network) that needs to be exposed to the reporting engine
+type ServerInfo struct {
+	Addr  string
+	Codec rpc.Codec
+	ID    string
+}
+
+// some globals from Pacemaker
+type PacemakerGlobals struct {
+	n uint // total number of oracles
+	f uint // number of faulty oracles
+}
+
+// lasts only for a round and is reset after that
+type CacheLayer struct {
+	observe_n uint // no of observations received
+	report_n  uint // no of reports received
+}
+
 type GeneralState struct {
 	sentEcho       Report // the echoed attested report (TODO: shoudl be a diff DS)
 	sentReport     bool   // indicates if REPORT message has been sent for this round/ attested report which has been sent for this round
@@ -21,20 +48,27 @@ type GeneralState struct {
 }
 
 type ReportingEngine struct {
-	curRound int               // current round (shared state between leader and non-leading oracles)
-	isLeader bool              // indicates if the oracle is the leader or follower
-	epoch    uint64            // current epoch number
-	leader   *crypto.PublicKey // current leader
+	curRound int    // current round (shared state between leader and non-leading oracles)
+	isLeader bool   // indicates if the oracle is the leader or follower
+	epoch    uint64 // current epoch number
+	leader   string // current leader's PeerID
 	GeneralState
-	LeaderState // set either of the states, depending upon if hte oracle is leader or not
-	msgService  MessagingLayer
-	quitCh      chan struct{}
+	LeaderState      // set either of the states, depending upon if hte oracle is leader or not
+	msgService       MessagingLayer
+	serverOpts       ServerInfo
+	quitCh           chan struct{}
+	logger           *zap.SugaredLogger
+	cacheLayer       CacheLayer
+	pacemakerGlobals PacemakerGlobals
+	signer           crypto.PrivateKey
 }
 
-func NewReportingEngine(isLeader bool, epoch uint64, leader *crypto.PublicKey) *ReportingEngine {
+func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info ServerInfo, p_globals PacemakerGlobals, signer ecdsa.PrivateKey) *ReportingEngine {
 	re := &ReportingEngine{
-		epoch:  epoch,
-		leader: leader,
+		epoch:      epoch,
+		serverOpts: s_info,
+		leader:     leader,
+		signer:     signer,
 		GeneralState: GeneralState{
 			sentEcho:       Report{},
 			sentReport:     false,
@@ -42,16 +76,26 @@ func NewReportingEngine(isLeader bool, epoch uint64, leader *crypto.PublicKey) *
 			receivedEcho:   make([]bool, 1),
 		},
 		LeaderState: LeaderState{
-			observations:      make([]Observation, 1), // init of size 1, we can extend it in future
-			reports:           make([]Report, 1),
-			TimerRoundTimeout: NewTimer(RoundTmeout),
-			TimerGrace:        NewTimer(RoundGrace),
-			Phase:             PhaseNil, // should only be set if leader
-			phaseCh:           make(chan LeaderPhase),
+			observations: make([]Observation, 1), // init of size 1, we can extend it in future
+			reports:      make([]Report, 1),
+			// TimerRoundTimeout: NewTimer(RoundTmeout),
+			TimerRoundTimeout: &Timer{},
+			// TimerGrace:        NewTimer(RoundGrace),
+			TimerGrace: &Timer{},
+			Phase:      PhaseNil, // should only be set if leader
+			phaseCh:    make(chan LeaderPhase),
 		},
-		curRound: INIT_ROUND,
-		isLeader: isLeader,
+		curRound:         INIT_ROUND,
+		isLeader:         isLeader,
+		pacemakerGlobals: p_globals,
+		cacheLayer: CacheLayer{
+			observe_n: 0,
+			report_n:  0,
+		},
 	}
+
+	// config logger setup
+	re.logger = zap.S().With("epoch", epoch, "leader", leader, "round", re.curRound)
 
 	// if leader , do some intial config
 	if isLeader {
@@ -80,6 +124,7 @@ func (re *ReportingEngine) Start() {
 	}
 
 free:
+	// we need timers for round expiry here
 	for {
 		select {
 		case <-re.quitCh:
@@ -135,7 +180,7 @@ func (re *ReportingEngine) SendMsg(s SendingSchme, msg []byte, id string) {
 		re.msgService.BroadcastMsg(msg)
 	case LEADER:
 		// will have to fetch leader info from Packemaker via channels
-		re.msgService.SendMsg("", msg)
+		re.msgService.SendMsg(re.leader, msg)
 	case PEER:
 		re.msgService.SendMsg(id, msg)
 	}
@@ -146,8 +191,92 @@ func (re *ReportingEngine) AttachMsgLayer(msgService MessagingLayer) {
 }
 
 // all messages with say topic Reporter will be routed to repoter.ProcessMessage, now this msgs could be of any type , like leader senidng msg, braodcsating something, an oracle submitting an observation (all of these msgs should be defiend in rpc_leader.go inside rpc pkg i think), so reporter.ProcessMessage could either handle all of them itself and update the state of the RE glovally or it could delegrate, for now, lets shouild build a monolithic RPC handler for reptoer inside ProcessMessgae
-func (re *ReportingEngine) ProcessMessage(*rpc.DecodedMsg) error {
-	return nil
+func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
+	switch msg.Data.(type) {
+	case rpc.ObserveReq:
+		msg := msg.Data.(rpc.ObserveReq)
+		re.logger.Infof("RE: received OBSERVE-REQ msg: %v", msg)
+
+		re.curRound = int(msg.Round)
+		if re.curRound > MAX_ROUNDS {
+			re.logger.Infof("RE: max rounds reached, stopping RE")
+			// broadcast changeleader event
+
+			changeLeaderMsg := rpc.ChangeLeaderMessage{}
+
+			// constructing msg
+			rpcMsg, err := rpc.NewRPCMessageBuilder(
+				utils.NetAddr(re.serverOpts.Addr),
+				re.serverOpts.Codec,
+				re.serverOpts.ID,
+			).SetHeaders(
+				rpc.MessageChangeLeader,
+			).SetTopic(
+				rpc.Pacemaker,
+			).SetPayload(changeLeaderMsg).Bytes()
+
+			if err != nil {
+				panic(err)
+			}
+
+			re.msgService.BroadcastMsg(rpcMsg)
+
+			re.Stop()
+		}
+
+		// make observation about the given jobId
+		res := re.observe("dummy_jobid")
+
+		observeResmsg := rpc.ObserveResp{
+			Epoch:    re.epoch,
+			Leader:   re.leader,
+			Round:    uint64(re.curRound),
+			Response: res,
+		}
+
+		// signing observeMsg
+		msgBytes, err := observeResmsg.Bytes(re.serverOpts.Codec)
+		if err != nil {
+			re.logger.Errorf("RE: err converting to bytes")
+			return nil
+		}
+
+		signature, err := re.SignMessage(msgBytes)
+		if err != nil {
+			re.logger.Errorf("RE: err signing msg bytes")
+			return nil
+		}
+
+		// constructing msg
+		rpcMsg, err := rpc.NewRPCMessageBuilder(
+			utils.NetAddr(re.serverOpts.Addr),
+			re.serverOpts.Codec,
+			re.serverOpts.ID,
+		).SetHeaders(
+			rpc.MessageObserveRes,
+		).SetTopic(
+			rpc.Reporter,
+		).SetPayload(observeResmsg).SetSignature(signature).Bytes()
+
+		if err != nil {
+			panic(err)
+		}
+
+		re.msgService.BroadcastMsg(rpcMsg)
+
+		return nil
+
+	case rpc.ObserveResp:
+
+		// logic
+
+		return nil
+
+
+	default:
+		re.logger.Errorf("RE: unknown message type: %v", reflect.TypeOf(msg.Data))
+		return nil
+	}
 }
 
 func (r *ReportingEngine) Stop() {
@@ -162,4 +291,31 @@ func (re *ReportingEngine) cleanupFunc() {
 	// cleanup function
 	// will be called when the reporting engine is stopped
 	// will have to cleanup the state and any other resources
+}
+
+// for makign observations about a specific jobId
+func (re *ReportingEngine) observe(jobId string) []byte {
+	// to be implemented
+	return []byte("hello")
+}
+
+func (re *ReportingEngine) SignMessage(msg []byte) ([]byte, error) {
+	// Assert that re.signer is an ECDSA private key
+	privKey, ok := re.signer.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("signer is not an ECDSA private key")
+	}
+
+	// Hash the message
+	hashed := sha256.Sum256(msg)
+
+	// Sign the message
+	r, s, err := ecdsa.Sign(rand.Reader, privKey, hashed[:])
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert r and s to a byte slice (you may need to serialize this differently)
+	signature := append(r.Bytes(), s.Bytes()...)
+	return signature, nil
 }

@@ -11,6 +11,9 @@ type MesageTopic byte
 const (
 	MessageNewEpoch MessageType = 0x1
 	MessageStatus   MessageType = 0x2
+	MessageChangeLeader MessageType = 0x3
+	MessageObserveReq MessageType = 0x4
+	MessageObserveRes MessageType = 0x5
 
 	Pacemaker MesageTopic = iota
 	Reporter  MesageTopic = 0x1

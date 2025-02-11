@@ -1,5 +1,10 @@
 package ocr
 
+import (
+	"eavesdrop/rpc"
+	"eavesdrop/utils"
+)
+
 type LeaderPhase byte
 
 const (
@@ -21,11 +26,44 @@ type LeaderState struct {
 	phaseCh           chan LeaderPhase
 }
 
-
 func (re *ReportingEngine) handleObserve() {
 	// handle the OBSERVE phase
 	// will have to listen to the OBSERVE messages from the leader
 	// and update the state accordingly
+
+	// increment hte round number
+	re.curRound++
+
+	// send out OBSERVE-REQ msgs and init the observations and reports if not already done
+	observeReqMsg := rpc.ObserveReq{
+		Epoch:  re.epoch,
+		Round:  uint64(re.curRound),
+		Leader: re.leader,
+	}
+
+	// constructing msg
+	rpcMsg, err := rpc.NewRPCMessageBuilder(
+		utils.NetAddr(re.serverOpts.Addr),
+		re.serverOpts.Codec,
+		re.serverOpts.ID,
+	).SetHeaders(
+		rpc.MessageObserveReq,
+	).SetTopic(
+		rpc.Reporter,
+	).SetPayload(observeReqMsg).Bytes()
+
+	if err != nil {
+		panic(err)
+	}
+
+	re.msgService.BroadcastMsg(rpcMsg)
+
+	// start the round timer (have a handler for the timer expiry) in top most loop
+	re.LeaderState.TimerRoundTimeout = NewTimer(RoundTmeout)
+
+	// change state to OBSERVE
+	re.Phase = PhaseObserve
+	re.phaseCh <- PhaseObserve
 }
 
 func (re *ReportingEngine) handleGrace() {

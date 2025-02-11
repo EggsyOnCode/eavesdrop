@@ -44,7 +44,7 @@ func NewOCR(s *Server) *OCR {
 		state:         rpc.PREPARE,
 		logger:        logger.Get().Sugar(),
 	}
-	ocr.Pacemaker = NewPaceMaker(s, ocr.pacemakerCh)
+	ocr.Pacemaker = NewPaceMaker(s, ocr.pacemakerCh, s.PrivateKey)
 	return ocr
 }
 
