@@ -1,6 +1,9 @@
 package crypto
 
-import "encoding/hex"
+import (
+	"encoding/hex"
+	"errors"
+)
 
 // address is a 20 bytes hexademical string
 // obtained from doing a keccak round on the public key and extracting the last 20 bytes
@@ -29,5 +32,31 @@ func AddressFromBytes(b []byte) Address {
 
 // hash is implementing the String interface meaning all its outputs will now be typecasted to  hex string
 func (a Address) String() string {
-	return hex.EncodeToString(a.ToSlice())
+	return "0x" + hex.EncodeToString(a.ToSlice()) 
+}
+
+
+// UnmarshalText implements the encoding.TextUnmarshaler interface for TOML unmarshalling.
+func (a *Address) UnmarshalText(text []byte) error {
+	hexStr := string(text)
+
+	// Remove '0x' prefix if present
+	if len(hexStr) >= 2 && hexStr[:2] == "0x" {
+		hexStr = hexStr[2:]
+	}
+
+	decoded, err := hex.DecodeString(hexStr)
+	if err != nil {
+		return err
+	}
+	if len(decoded) != 20 {
+		return errors.New("invalid address length")
+	}
+	copy(a[:], decoded)
+	return nil
+}
+
+// MarshalText implements the encoding.TextMarshaler interface for TOML marshalling.
+func (a Address) MarshalText() ([]byte, error) {
+	return []byte(a.String()), nil
 }
