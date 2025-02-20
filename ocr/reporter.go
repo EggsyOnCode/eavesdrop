@@ -5,11 +5,14 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
+	"eavesdrop/ocr/jobs"
 	"eavesdrop/rpc"
 	"eavesdrop/utils"
 	"fmt"
 	"reflect"
 	"time"
+
+	fifo "github.com/foize/go.fifo"
 
 	"go.uber.org/zap"
 )
@@ -19,6 +22,8 @@ const (
 	INIT_ROUND                = 1
 	RoundTmeout time.Duration = time.Second * 20
 	RoundGrace  time.Duration = time.Second * 5
+
+	jobsDir string = "../jobs_def"
 )
 
 // info about the server (p2p network) that needs to be exposed to the reporting engine
@@ -61,14 +66,19 @@ type ReportingEngine struct {
 	cacheLayer       CacheLayer
 	pacemakerGlobals PacemakerGlobals
 	signer           crypto.PrivateKey
+	recEvents        *fifo.Queue
+	jobRegistry      *map[string]jobs.Job // used to query the job info when an event is received
+	jobSchedule      map[int][]jobs.Job   // schedule of jobs to be observed in each round
 }
 
 func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info ServerInfo, p_globals PacemakerGlobals, signer ecdsa.PrivateKey) *ReportingEngine {
 	re := &ReportingEngine{
-		epoch:      epoch,
-		serverOpts: s_info,
-		leader:     leader,
-		signer:     signer,
+		epoch:       epoch,
+		serverOpts:  s_info,
+		leader:      leader,
+		jobSchedule: map[int][]jobs.Job{},
+		signer:      signer,
+		jobRegistry: &map[string]jobs.Job{},
 		GeneralState: GeneralState{
 			sentEcho:       Report{},
 			sentReport:     false,
@@ -105,7 +115,7 @@ func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info Serve
 	return re
 }
 
-func (re *ReportingEngine) Start() {
+func (re *ReportingEngine) Start(recEvents *fifo.Queue, jobReg *map[string]jobs.Job) {
 	// function's design:
 	// permanet listener, will use a quitch to stop the listener and current RE
 	// if leader: will listen to channel for updates to re.phase and upon each phase
@@ -114,22 +124,26 @@ func (re *ReportingEngine) Start() {
 	// if non-leader: will listen to rpc msgs from the leader and handle them accordingly
 	// in fact a meta-seprator can be used where if hte re is a leader, launcha main listener in a go routine and then launch a phase handler in a go routine
 	// if non-leader, launch a main listener in a separate go routine
+	re.jobRegistry = jobReg
 
 	if re.isLeader {
+
+		// schedule the jobs to be observed during each round of the epoch
+		re.recEvents = recEvents // received from pacemaker
+		n := recEvents.Len()
+		jobs_per_round := (n / MAX_ROUNDS)
+		for i := 0; i < MAX_ROUNDS; i++ {
+			for j := 0; j < int(jobs_per_round); j++ {
+				job := recEvents.Next()
+				re.jobSchedule[i] = append(re.jobSchedule[i], job.(jobs.Job))
+			}
+		}
+
 		go re.orchestrateLeadership()
 		time.Sleep(1 * time.Second) // to ensure the leader is ready
 		re.LeaderState.phaseCh <- PhaseObserve
 	} else {
 		go re.orchestrateFollowing()
-	}
-
-free:
-	//TODO: we need timers for round expiry here
-	for {
-		select {
-		case <-re.quitCh:
-			break free
-		}
 	}
 }
 
@@ -288,6 +302,8 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 	}
 }
 
+// to be called by the pacemaker, should return the imp state of current
+// epoch needed to bootstrap the new epoch
 func (r *ReportingEngine) Stop() {
 	// stop the reporting engine
 	close(r.quitCh)

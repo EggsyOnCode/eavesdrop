@@ -3,9 +3,11 @@ package ocr
 import (
 	"eavesdrop/crypto"
 	"eavesdrop/logger"
+	"eavesdrop/ocr/jobs"
 	"eavesdrop/rpc"
 	"time"
 
+	fifo "github.com/foize/go.fifo"
 	"go.uber.org/zap"
 )
 
@@ -50,6 +52,10 @@ type Pacemaker struct {
 	logger   *zap.SugaredLogger
 
 	signer *crypto.PrivateKey // we need it to sign msgs, also derive ID
+
+	recEventsChan chan jobs.JobEventResponse
+	recEvents     fifo.Queue
+	jobRegistry   map[string]jobs.Job // used to query the job info when an event is received
 }
 
 func NewPaceMaker(s *Server, ocrCh chan *rpc.PacemakerMessage, signer *crypto.PrivateKey) *Pacemaker {
@@ -67,6 +73,9 @@ func NewPaceMaker(s *Server, ocrCh chan *rpc.PacemakerMessage, signer *crypto.Pr
 		ocrCh:         ocrCh,
 		logger:        logger.Get().Sugar(),
 		signer:        signer,
+		recEventsChan: make(chan jobs.JobEventResponse),
+		recEvents:     *fifo.NewQueue(),
+		jobRegistry:   map[string]jobs.Job{},
 	}
 }
 
@@ -101,6 +110,12 @@ func (p *Pacemaker) Start() {
 	go func() {
 		for {
 			select {
+
+			case event := <-p.recEventsChan:
+				// handle the events
+				// add to recEvents array for future processing
+				p.recEvents.Add(event)
+
 			case <-p.TimerResend.Subscribe():
 				// Broadcast NEWEPOCH message
 				payload := &rpc.NewEpochMesage{
@@ -137,6 +152,9 @@ func (p *Pacemaker) Start() {
 	} else {
 		p.upateOCRState(rpc.FOLLOWING)
 	}
+
+	// launch event listeners
+	go p.launchJobListeners()
 }
 
 func (p *Pacemaker) ProcessMessage(msg *rpc.DecodedMsg) error {
@@ -214,8 +232,52 @@ func (p *Pacemaker) switchToNewEpoch() {
 	p.currEpochStat.n_e0 = 0
 	p.currEpochStat.new_e = 0
 
+	// recEvents are the events that have been recorded by the reporting engine during current epoch
 	p.Reporter.Stop()
-	// TODO: start a new one
+
+	// if leader , send in the recEvents
+	// if follower, send in empty queue
+	leader := findLeader(int(p.currEpochStat.e), secretKey, p.server.peers)
+	if leader.ID == p.ocrCtx.ID {
+		p.Reporter.Start(&p.recEvents, &p.jobRegistry)
+	} else {
+		p.Reporter.Start(&fifo.Queue{}, &p.jobRegistry) // send in empty queue if follower
+	}
 
 	p.logger.Infof("PACEMAKER: switched to new epoch %v\n", p.currEpochStat.e)
+}
+
+func (p *Pacemaker) launchJobListeners() {
+	// TODO: read the jobs from toml specs, launch thier event listeners,
+	// use a channel to receved the receivedEvents (if any) and store them in some state
+	// schedule tehm to be sent for observations (schedule is FIFO queue)
+	// if no receveid Events, change leader msg emit if leader
+
+	// read jobs
+	readers, err := jobs.ReadJobsFromDir(jobsDir)
+	if err != nil {
+		p.logger.Errorf("RE: err reading jobs from dir: %v", err)
+		return
+	}
+
+	// create JobStructures
+	jobReaderFac := jobs.NewJobReaderFactory()
+	jobReaderconfig := jobs.JobReaderConfig{
+		JobFormat: jobs.JobFormatTOML,
+	}
+
+	for _, reader := range readers {
+		job, err := jobReaderFac.Read(reader, jobReaderconfig)
+		if err != nil {
+			p.logger.Errorf("RE: err creating job from reader: %v", err)
+			continue
+		}
+
+		// add job to registry
+		p.jobRegistry[job.ID()] = job
+
+		// launch event listeners
+		go job.Listen(p.recEventsChan)
+	}
+
 }

@@ -142,3 +142,7 @@ func (dr *DirectRequest) Execute(task DirectReqTask) error {
 
 	return nil
 }
+
+func (dr *DirectRequest) Listen(chan JobEventResponse) {
+	// no-op
+}

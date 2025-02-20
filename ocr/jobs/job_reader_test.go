@@ -72,7 +72,6 @@ func TestDirectReqTomlConfigReader(t *testing.T) {
 	factory := NewJobReaderFactory()
 	config := JobReaderConfig{
 		JobFormat: JobFormatTOML,
-		JobType:   DirectReqJob,
 	}
 	job, err := factory.Read(GetTOMLReader(), config)
 	assert.NoError(t, err)
