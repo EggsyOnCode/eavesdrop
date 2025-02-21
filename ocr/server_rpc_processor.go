@@ -90,6 +90,38 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 			Topic:  msg.Topic,
 			Data:   newMsg,
 		}, nil
+
+	case rpc.MessageObserveReq:
+		newMsg := &rpc.ObserveReq{}
+		if err := codec.Decode(msg.Data, newMsg); err != nil {
+			return nil, err
+		}
+		return &rpc.DecodedMsg{
+			FromId: rpcMsg.FromID,
+			Topic:  msg.Topic,
+			Data:   newMsg,
+		}, nil
+
+	case rpc.MessageObserveRes:
+		newMsg := &rpc.ObserveResp{}
+		if err := codec.Decode(msg.Data, newMsg); err != nil {
+			return nil, err
+		}
+		return &rpc.DecodedMsg{
+			FromId: rpcMsg.FromID,
+			Topic:  msg.Topic,
+			Data:   newMsg,
+		}, nil
+	case rpc.MessageChangeLeader:
+		newMsg := &rpc.ChangeLeaderMessage{}
+		if err := codec.Decode(msg.Data, newMsg); err != nil {
+			return nil, err
+		}
+		return &rpc.DecodedMsg{
+			FromId: rpcMsg.FromID,
+			Topic:  msg.Topic,
+			Data:   newMsg,
+		}, nil
 	default:
 		return nil, fmt.Errorf("unknown message type: %v", msg.Headers)
 	}
