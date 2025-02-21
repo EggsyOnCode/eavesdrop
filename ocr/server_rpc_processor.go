@@ -108,9 +108,10 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 			return nil, err
 		}
 		return &rpc.DecodedMsg{
-			FromId: rpcMsg.FromID,
-			Topic:  msg.Topic,
-			Data:   newMsg,
+			FromId:    rpcMsg.FromID,
+			Topic:     msg.Topic,
+			Data:      newMsg,
+			Signature: rpcMsg.Signature,
 		}, nil
 	case rpc.MessageChangeLeader:
 		newMsg := &rpc.ChangeLeaderMessage{}

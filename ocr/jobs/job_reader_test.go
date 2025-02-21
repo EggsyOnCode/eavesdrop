@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -81,7 +82,7 @@ func TestDirectReqTomlConfigReader(t *testing.T) {
 	}
 
 	assert.Equal(t, "8aa49abd-0437-4eca-8fd4-84e11119fb0b", job.ID())
-	assert.NoError(t, job.Run())
+	assert.NoError(t, job.Run(context.Background()))
 	result, err := job.Result()
 	assert.NoError(t, err)
 

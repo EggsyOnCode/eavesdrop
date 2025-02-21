@@ -21,10 +21,10 @@ type Observation []byte
 
 type LeaderState struct {
 	observations      map[string][]rpc.JobObservationResponse // signed observations received in OBSERVE messages
-	reports           []Report               // attested reports received in REPORT messages
-	TimerRoundTimeout *Timer                 // timer Tround with timeout duration ∆round , initially stopped
-	TimerGrace        *Timer                 // timer Tgrace with timeout duration ∆grace , initially stopped
-	Phase             LeaderPhase            // current phase of the leader
+	reports           []Report                                // attested reports received in REPORT messages
+	TimerRoundTimeout *Timer                                  // timer Tround with timeout duration ∆round , initially stopped
+	TimerGrace        *Timer                                  // timer Tgrace with timeout duration ∆grace , initially stopped
+	Phase             LeaderPhase                             // current phase of the leader
 	phaseCh           chan LeaderPhase
 }
 

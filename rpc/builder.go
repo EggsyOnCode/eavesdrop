@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	c "eavesdrop/crypto"
 	"eavesdrop/utils"
 	"fmt"
 )
@@ -13,7 +14,7 @@ type RPCMessageBuilder struct {
 	headers     MessageType
 	topic       MesageTopic
 	payloadData interface{} // Generic payload (e.g., StatusMsg, NewEpochMsg, etc.)
-	signature   []byte
+	signature   c.Signature
 	message     []byte
 }
 
@@ -44,7 +45,7 @@ func (b *RPCMessageBuilder) SetPayload(payload interface{}) *RPCMessageBuilder {
 	return b
 }
 
-func (b *RPCMessageBuilder) SetSignature(sign []byte) *RPCMessageBuilder {
+func (b *RPCMessageBuilder) SetSignature(sign c.Signature) *RPCMessageBuilder {
 	b.signature = sign
 	return b
 }

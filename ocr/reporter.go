@@ -2,14 +2,10 @@ package ocr
 
 import (
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/rand"
-	"crypto/sha256"
+	c "eavesdrop/crypto"
 	"eavesdrop/ocr/jobs"
 	"eavesdrop/rpc"
 	"eavesdrop/utils"
-	"fmt"
 	"reflect"
 	"sync"
 	"time"
@@ -67,13 +63,13 @@ type ReportingEngine struct {
 	logger           *zap.SugaredLogger
 	cacheLayer       CacheLayer
 	pacemakerGlobals PacemakerGlobals
-	signer           crypto.PrivateKey
+	signer           c.PrivateKey
 	recEvents        *fifo.Queue
 	jobRegistry      *map[string]jobs.Job // used to query the job info when an event is received
 	jobSchedule      map[int][]jobs.Job   // schedule of jobs to be observed in each round
 }
 
-func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info ServerInfo, p_globals PacemakerGlobals, signer ecdsa.PrivateKey) *ReportingEngine {
+func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info ServerInfo, p_globals PacemakerGlobals, signer c.PrivateKey) *ReportingEngine {
 	re := &ReportingEngine{
 		epoch:       epoch,
 		serverOpts:  s_info,
@@ -338,12 +334,34 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 		return nil
 
 	case rpc.ObserveResp:
+		// shall only be received by teh leader
+
 		observation := msg.Data.(rpc.ObserveResp)
 		if (observation.Round == uint64(re.curRound)) && (observation.Epoch == re.epoch) {
+			// verify the msg signature
+			msgBytes, err := observation.Bytes(re.serverOpts.Codec)
+			if err != nil {
+				re.logger.Errorf("RE: err converting to bytes")
+				return nil
+			}
+
+			var pk c.PublicKey
+			if pk, err = c.StringToPublicKey(msg.FromId); err != nil {
+				re.logger.Errorf("RE: err casting strng to pk")
+				return nil
+			}
+
+			isSigned := msg.Signature.Verify(msgBytes, pk)
+			if isSigned {
+				// add observations to the state
+				re.observations[msg.FromId] = observation.JobResponses
+			} else {
+				re.logger.Errorf("RE: observe res msg incorreclty / not signed; dropping..")
+				return nil
+			}
+
 			// update the cache layer
 			re.cacheLayer.observe_n++
-			// add observations to the state
-			re.observations[msg.FromId] = observation.JobResponses
 
 			if re.cacheLayer.observe_n > 2*re.pacemakerGlobals.f+1 {
 				re.Phase = PhaseGrace
@@ -375,29 +393,7 @@ func (re *ReportingEngine) cleanupFunc() {
 	// will have to cleanup the state and any other resources
 }
 
-// for makign observations about a specific jobId
-func (re *ReportingEngine) observe(jobId string) []byte {
-	// to be implemented
-	return []byte("hello")
-}
-
-func (re *ReportingEngine) SignMessage(msg []byte) ([]byte, error) {
-	// Assert that re.signer is an ECDSA private key
-	privKey, ok := re.signer.(*ecdsa.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("signer is not an ECDSA private key")
-	}
-
-	// Hash the message
-	hashed := sha256.Sum256(msg)
-
-	// Sign the message
-	r, s, err := ecdsa.Sign(rand.Reader, privKey, hashed[:])
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert r and s to a byte slice (you may need to serialize this differently)
-	signature := append(r.Bytes(), s.Bytes()...)
-	return signature, nil
+func (re *ReportingEngine) SignMessage(msg []byte) (c.Signature, error) {
+	sign, err := re.signer.Sign(msg)
+	return *sign, err
 }
