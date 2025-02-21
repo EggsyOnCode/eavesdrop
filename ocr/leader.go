@@ -1,6 +1,7 @@
 package ocr
 
 import (
+	"eavesdrop/ocr/jobs"
 	"eavesdrop/rpc"
 	"eavesdrop/utils"
 	"time"
@@ -19,7 +20,7 @@ const (
 type Observation []byte
 
 type LeaderState struct {
-	observations      map[string]Observation // signed observations received in OBSERVE messages
+	observations      map[string][]rpc.JobObservationResponse // signed observations received in OBSERVE messages
 	reports           []Report               // attested reports received in REPORT messages
 	TimerRoundTimeout *Timer                 // timer Tround with timeout duration ∆round , initially stopped
 	TimerGrace        *Timer                 // timer Tgrace with timeout duration ∆grace , initially stopped
@@ -35,11 +36,15 @@ func (re *ReportingEngine) handleObserve() {
 	// increment hte round number
 	re.curRound++
 
+	// get the list of jobs to be processed in nextRound
+	curRoundJobInfos := re.GetJobInfosForCurrRound()
+
 	// send out OBSERVE-REQ msgs and init the observations and reports if not already done
 	observeReqMsg := rpc.ObserveReq{
 		Epoch:  re.epoch,
 		Round:  uint64(re.curRound),
 		Leader: re.leader,
+		Jobs:   curRoundJobInfos,
 	}
 
 	// constructing msg
@@ -90,4 +95,22 @@ func (re *ReportingEngine) handleFinal() {
 	// handle the FINAL phase
 	// will have to listen to the FINAL messages from the leader
 	// and update the state accordingly
+}
+
+func (re *ReportingEngine) GetJobInfosForCurrRound() []jobs.JobInfo {
+	// get the list of jobs for the current round
+	js := re.jobSchedule[re.curRound]
+	var jobInfos []jobs.JobInfo
+	for _, job := range js {
+		jobInfo := jobs.JobInfo{
+			JobID:    job.ID(),
+			JobType:  job.Type(),
+			Template: job.Payload(),
+			Timeout:  job.TaskTimeout(),
+		}
+
+		jobInfos = append(jobInfos, jobInfo)
+	}
+
+	return jobInfos
 }

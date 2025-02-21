@@ -1,6 +1,7 @@
 package ocr
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"eavesdrop/utils"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	fifo "github.com/foize/go.fifo"
@@ -86,7 +88,7 @@ func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info Serve
 			receivedEcho:   make([]bool, 1),
 		},
 		LeaderState: LeaderState{
-			observations: map[string]Observation{}, // init of size 1, we can extend it in future
+			observations: map[string][]rpc.JobObservationResponse{},
 			reports:      make([]Report, 1),
 			// TimerRoundTimeout: NewTimer(RoundTmeout),
 			TimerRoundTimeout: &Timer{},
@@ -133,7 +135,7 @@ func (re *ReportingEngine) Start(recEvents *fifo.Queue, jobReg *map[string]jobs.
 		n := recEvents.Len()
 		jobs_per_round := (n / MAX_ROUNDS)
 		for i := 0; i < MAX_ROUNDS; i++ {
-			for j := 0; j < int(jobs_per_round); j++ {
+			for j := 1; j < int(jobs_per_round); j++ {
 				job := recEvents.Next()
 				re.jobSchedule[i] = append(re.jobSchedule[i], job.(jobs.Job))
 			}
@@ -238,14 +240,69 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 			re.Stop()
 		}
 
-		// make observation about the given jobId
-		res := re.observe("dummy_jobid")
+		var wg sync.WaitGroup
+		resChan := make(chan rpc.JobObservationResponse, len(msg.Jobs))
+		errChan := make(chan error, len(msg.Jobs))
+
+		// Create job instances from jobInfos received
+		for _, jobInfo := range msg.Jobs {
+			job, err := jobs.NewJobFromInfo(jobInfo)
+			if err != nil {
+				re.logger.Errorf("RE: err creating job instance from info")
+				return nil
+			}
+
+			wg.Add(1)
+			go func(job jobs.Job, jobInfo jobs.JobInfo) {
+				defer wg.Done()
+
+				// Run the job with a timeout context
+				ctx, cancel := context.WithTimeout(context.Background(), jobInfo.Timeout)
+				defer cancel()
+
+				if err := job.Run(ctx); err != nil {
+					re.logger.Errorf("RE: err running job's observation: %v", err)
+					errChan <- err
+					return
+				}
+
+				// Fetch result
+				res, err := job.Result()
+				if err != nil {
+					re.logger.Errorf("RE: err obtaining job's result: %v", err)
+					errChan <- err
+					return
+				}
+
+				// Send result to channel
+				resChan <- rpc.JobObservationResponse{
+					JobId:    jobInfo.JobID,
+					Response: res,
+				}
+			}(job, jobInfo)
+		}
+
+		// Wait for all jobs to finish
+		wg.Wait()
+		close(resChan)
+		close(errChan)
+
+		// Collect all results
+		var responses []rpc.JobObservationResponse
+		for res := range resChan {
+			responses = append(responses, res)
+		}
+
+		// If there were errors, return the first one
+		if err := <-errChan; err != nil {
+			return err
+		}
 
 		observeResmsg := rpc.ObserveResp{
-			Epoch:    re.epoch,
-			Leader:   re.leader,
-			Round:    uint64(re.curRound),
-			Response: res,
+			Epoch:        re.epoch,
+			Leader:       re.leader,
+			Round:        uint64(re.curRound),
+			JobResponses: responses,
 		}
 
 		// signing observeMsg
@@ -286,7 +343,7 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 			// update the cache layer
 			re.cacheLayer.observe_n++
 			// add observations to the state
-			re.observations[msg.FromId] = observation.Response
+			re.observations[msg.FromId] = observation.JobResponses
 
 			if re.cacheLayer.observe_n > 2*re.pacemakerGlobals.f+1 {
 				re.Phase = PhaseGrace

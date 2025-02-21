@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"eavesdrop/crypto"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -42,8 +44,11 @@ type DirectRequest struct {
 	JobID   string
 	JobType JobType
 	params  DirectRequestTemplateParams
+
 	Results map[string]interface{}
 	timeout uint // timeout in ms
+
+	mu sync.Mutex
 }
 
 func (dr *DirectRequest) ID() string {
@@ -58,16 +63,42 @@ func (dr *DirectRequest) Payload() interface{} {
 	return dr.params
 }
 
-func (dr *DirectRequest) Run() error {
+func (dr *DirectRequest) Run(ctx context.Context) error {
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(dr.params.ObservationSource))
+
 	for _, task := range dr.params.ObservationSource {
-		if err := dr.Execute(task); err != nil {
-			return fmt.Errorf("error executing task %s: %v", task.Name, err)
+		wg.Add(1)
+		go func(task DirectReqTask) {
+			defer wg.Done()
+			select {
+			case <-ctx.Done():
+				errChan <- fmt.Errorf("execution cancelled: %v", ctx.Err())
+				return
+			default:
+				if err := dr.Execute(task); err != nil {
+					errChan <- fmt.Errorf("error executing task %s: %v", task.Name, err)
+				}
+			}
+		}(task)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	for err := range errChan {
+		if err != nil {
+			return err
 		}
 	}
+
 	return nil
 }
 
 func (dr *DirectRequest) Result() ([]byte, error) {
+	dr.mu.Lock()
+	defer dr.mu.Unlock()
+
 	finalTask := dr.params.ObservationSource[len(dr.params.ObservationSource)-1]
 	log.Printf("results, %v", dr.Results)
 	result, ok := dr.Results[finalTask.Name]
@@ -84,6 +115,9 @@ func (dr *DirectRequest) TaskTimeout() time.Duration {
 
 // Execute a task based on its type
 func (dr *DirectRequest) Execute(task DirectReqTask) error {
+	dr.mu.Lock()
+	defer dr.mu.Unlock()
+
 	switch task.Type {
 	case "http":
 		resp, err := http.Get(task.URL)
