@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"eavesdrop/crypto"
+	"eavesdrop/logger"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,11 +15,20 @@ import (
 )
 
 type ChainID string
+type ReportingStrategy string
 
 const (
 	ChainIDEthereum ChainID = "ethereum"
 	ChainIDSolana   ChainID = "Solana"
+
+	HashCompare              ReportingStrategy = "hashcompare"
+	MeanCalc                 ReportingStrategy = "mean"
+	MultiFieldMajorityVoting ReportingStrategy = "fieldvote"
 )
+
+type DirectReqReportGenParms struct {
+	Strategy ReportingStrategy `toml:"strategy"`
+}
 
 type DirectReqTask struct {
 	Name   string  `toml:"name"`
@@ -31,13 +41,14 @@ type DirectReqTask struct {
 }
 
 type DirectRequestTemplateParams struct {
-	ContractAddress   crypto.Address  `toml:"contractAddress"`
-	EvmChainID        uint64          `toml:"evmChainID"`
-	ChainID           ChainID         `toml:"chainID"`
-	ExternalJobID     string          `toml:"externalJobId"`
-	SchemaVersion     uint64          `toml:"schemaVersion"`
-	Name              string          `toml:"name"`
-	ObservationSource []DirectReqTask `toml:"observationSource"`
+	ContractAddress   crypto.Address          `toml:"contractAddress"`
+	EvmChainID        uint64                  `toml:"evmChainID"`
+	ChainID           ChainID                 `toml:"chainID"`
+	ExternalJobID     string                  `toml:"externalJobId"`
+	SchemaVersion     uint64                  `toml:"schemaVersion"`
+	Name              string                  `toml:"name"`
+	ObservationSource []DirectReqTask         `toml:"observationSource"`
+	ReportingStrategy DirectReqReportGenParms `toml:"reporting"`
 }
 
 type DirectRequest struct {
@@ -47,8 +58,20 @@ type DirectRequest struct {
 
 	Results map[string]interface{}
 	timeout uint // timeout in ms
+	ReportAssembler
 
 	mu sync.Mutex
+}
+
+func NewDirectReq(params DirectRequestTemplateParams) *DirectRequest {
+	return &DirectRequest{
+		JobID:   params.ExternalJobID,
+		JobType: DirectReqJob,
+		params:  params,
+		Results: make(map[string]interface{}),
+		timeout: 0,
+		mu:      sync.Mutex{},
+	}
 }
 
 func (dr *DirectRequest) ID() string {
@@ -91,6 +114,15 @@ func (dr *DirectRequest) Run(ctx context.Context) error {
 			return err
 		}
 	}
+
+	// select reporting strategy
+	reporter, err := NewReportAssembler(dr.params.ReportingStrategy.Strategy)
+	if err != nil {
+		logger.Get().Sugar().Errorf("failed to create report assembler: %v", err)
+		return err
+	}
+
+	dr.ReportAssembler = reporter
 
 	return nil
 }

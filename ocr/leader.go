@@ -1,9 +1,11 @@
 package ocr
 
 import (
+	"crypto/sha256"
 	"eavesdrop/ocr/jobs"
 	"eavesdrop/rpc"
 	"eavesdrop/utils"
+	"encoding/json"
 	"time"
 )
 
@@ -15,16 +17,20 @@ const (
 	PhaseGrace   LeaderPhase = 0x1
 	PhaseReport  LeaderPhase = 0x2
 	PhaseFinal   LeaderPhase = 0x3
+
+	DURATION_BW_OM_REPORT_REQ int = 5
 )
 
 type Observation []byte
 
 type LeaderState struct {
-	observations      map[string][]rpc.JobObservationResponse // signed observations received in OBSERVE messages
-	reports           []Report                                // attested reports received in REPORT messages
-	TimerRoundTimeout *Timer                                  // timer Tround with timeout duration ∆round , initially stopped
-	TimerGrace        *Timer                                  // timer Tgrace with timeout duration ∆grace , initially stopped
-	Phase             LeaderPhase                             // current phase of the leader
+	// map of peerIds to job responses
+	observations      ObservationSafeMap // signed observations received in OBSERVE messages
+	finalReport       rpc.JobReports     // final report to be sent in FINAL message
+	reports           []Report           // attested reports received in REPORT messages
+	TimerRoundTimeout *Timer             // timer Tround with timeout duration ∆round , initially stopped
+	TimerGrace        *Timer             // timer Tgrace with timeout duration ∆grace , initially stopped
+	Phase             LeaderPhase        // current phase of the leader
 	phaseCh           chan LeaderPhase
 }
 
@@ -86,9 +92,49 @@ func (re *ReportingEngine) handleGrace() {
 }
 
 func (re *ReportingEngine) handleReport() {
-	// handle the REPORT phase
-	// will have to listen to the REPORT messages from the leader
-	// and update the state accordingly
+	// handle the REPORT phase as a leader
+
+	// braodcast JSON marshalled ObservationMap to all followers
+	data, err := re.observations.MarshalJSON()
+	if err != nil {
+		re.logger.Errorf("RE: failed to marshal observations: %v", err)
+		return
+	}
+
+	// first broadcast OM to all peers
+	if err := re.broadcastObservationMap(data); err != nil {
+		re.logger.Errorf("RE: failed to broadcast ObservationMap: %v", err)
+		return
+	}
+
+	// sleep to allow msg to be braodcsted thruought the network
+	time.Sleep(time.Duration(DURATION_BW_OM_REPORT_REQ) * time.Second)
+
+	// construct the REPORT-REQ msg
+	reportReq := rpc.ReportReq{
+		Epoch:        re.epoch,
+		Leader:       re.leader,
+		Round:        uint64(re.curRound),
+		Observations: data,
+	}
+
+	// constructing msg
+	rpcMsg, err := rpc.NewRPCMessageBuilder(
+		utils.NetAddr(re.serverOpts.Addr),
+		re.serverOpts.Codec,
+		re.serverOpts.ID,
+	).SetHeaders(
+		rpc.MessageReportReq,
+	).SetTopic(
+		rpc.Reporter,
+	).SetPayload(reportReq).Bytes()
+
+	if err != nil {
+		panic(err)
+	}
+
+	re.msgService.BroadcastMsg(rpcMsg)
+
 }
 
 func (re *ReportingEngine) handleFinal() {
@@ -113,4 +159,94 @@ func (re *ReportingEngine) GetJobInfosForCurrRound() []jobs.JobInfo {
 	}
 
 	return jobInfos
+}
+
+func (re *ReportingEngine) broadcastObservationMap(data []byte) error {
+	// construct the BraodcastObservationMap rpc message
+	observeMap := rpc.BroadcastObservationMap{
+		Epoch:        re.epoch,
+		Leader:       re.leader,
+		Round:        uint64(re.curRound),
+		Observations: data,
+	}
+
+	// constructing msg
+	rpcMsg, err := rpc.NewRPCMessageBuilder(
+		utils.NetAddr(re.serverOpts.Addr),
+		re.serverOpts.Codec,
+		re.serverOpts.ID,
+	).SetHeaders(
+		rpc.MessageObservationMap,
+	).SetTopic(
+		rpc.Reporter,
+	).SetPayload(observeMap).Bytes()
+
+	if err != nil {
+		return err
+	}
+
+	re.msgService.BroadcastMsg(rpcMsg)
+
+	return nil
+}
+
+func (re *ReportingEngine) assembleFinalReport() (rpc.JobReports, bool) {
+	// will be called by the leader
+	// compare hashes of all teh reports obtained in more than f+1 the REPORT_RES msgs
+	// if for f+1/n nodes , teh hash is same, then the final report is valid
+	// if not, then the final report is invalid and move to next round
+	// finalreport is Data , signature[] of all f+1 nodes
+
+	jobHashCount := make(map[string]map[[32]byte]int)  // jobID -> (hash -> count)
+	jobFinalReports := make(map[string]rpc.JobReports) // jobID -> final report
+
+	// Iterate over all received reports
+	for _, report := range re.reports {
+		for jobID, response := range report.reports { // Iterate over jobID -> responseData
+			// Serialize responseData to bytes for hashing
+			responseBytes, err := json.Marshal(response)
+			if err != nil {
+				re.logger.Errorf("Failed to serialize response for job %s: %v", jobID, err)
+				continue
+			}
+
+			// Compute hash of response
+			hash := sha256.Sum256(responseBytes)
+
+			// Initialize hash count map for the job if not already present
+			if jobHashCount[jobID] == nil {
+				jobHashCount[jobID] = make(map[[32]byte]int)
+			}
+
+			// Increment count of this hash for the job
+			jobHashCount[jobID][hash]++
+
+			// Store the report corresponding to this hash (only once per unique hash)
+			if _, exists := jobFinalReports[jobID]; !exists {
+				jobFinalReports[jobID] = report.reports
+			}
+		}
+	}
+
+	// Threshold for valid consensus
+	threshold := int(re.pacemakerGlobals.f) + 1
+
+	// Construct final report
+	finalReport := make(rpc.JobReports)
+	for jobID, hashCounts := range jobHashCount {
+		for _, count := range hashCounts {
+			if count >= threshold {
+				// Found consensus on this job’s response
+				finalReport[jobID] = jobFinalReports[jobID][jobID]
+				break // Move to next jobID
+			}
+		}
+	}
+
+	// If final report is empty, no consensus reached
+	if len(finalReport) == 0 {
+		return nil, false
+	}
+
+	return finalReport, true
 }

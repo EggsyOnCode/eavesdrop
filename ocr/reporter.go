@@ -41,6 +41,10 @@ type PacemakerGlobals struct {
 type CacheLayer struct {
 	observe_n uint // no of observations received
 	report_n  uint // no of reports received
+
+	jobs                  []jobs.Job
+	jobReports            rpc.JobReports
+	follower_observations ObservationSafeMap // observation map broadcasted by the leader to all followers before REPORT_REQ msg
 }
 
 type GeneralState struct {
@@ -84,7 +88,7 @@ func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info Serve
 			receivedEcho:   make([]bool, 1),
 		},
 		LeaderState: LeaderState{
-			observations: map[string][]rpc.JobObservationResponse{},
+			observations: ObservationSafeMap{},
 			reports:      make([]Report, 1),
 			// TimerRoundTimeout: NewTimer(RoundTmeout),
 			TimerRoundTimeout: &Timer{},
@@ -206,6 +210,8 @@ func (re *ReportingEngine) AttachMsgLayer(msgService MessagingLayer) {
 func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 	switch msg.Data.(type) {
 	case rpc.ObserveReq:
+		//shall only be recevied by followers
+
 		msg := msg.Data.(rpc.ObserveReq)
 		re.logger.Infof("RE: received OBSERVE-REQ msg: %v", msg)
 
@@ -237,7 +243,7 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 		}
 
 		var wg sync.WaitGroup
-		resChan := make(chan rpc.JobObservationResponse, len(msg.Jobs))
+		resChan := make(chan jobs.JobObservationResponse, len(msg.Jobs))
 		errChan := make(chan error, len(msg.Jobs))
 
 		// Create job instances from jobInfos received
@@ -247,6 +253,10 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 				re.logger.Errorf("RE: err creating job instance from info")
 				return nil
 			}
+
+			// add jobInfo to cache layer , to be used later
+			// for reporting
+			re.cacheLayer.jobs = append(re.cacheLayer.jobs, job)
 
 			wg.Add(1)
 			go func(job jobs.Job, jobInfo jobs.JobInfo) {
@@ -271,7 +281,7 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 				}
 
 				// Send result to channel
-				resChan <- rpc.JobObservationResponse{
+				resChan <- jobs.JobObservationResponse{
 					JobId:    jobInfo.JobID,
 					Response: res,
 				}
@@ -284,7 +294,7 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 		close(errChan)
 
 		// Collect all results
-		var responses []rpc.JobObservationResponse
+		var responses []jobs.JobObservationResponse
 		for res := range resChan {
 			responses = append(responses, res)
 		}
@@ -329,7 +339,8 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 			panic(err)
 		}
 
-		re.msgService.BroadcastMsg(rpcMsg)
+		// send back to leader
+		re.msgService.SendMsg(re.leader, rpcMsg)
 
 		return nil
 
@@ -354,7 +365,14 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 			isSigned := msg.Signature.Verify(msgBytes, pk)
 			if isSigned {
 				// add observations to the state
-				re.observations[msg.FromId] = observation.JobResponses
+				observationMap := make(map[string][]jobs.JobObservationResponse) // ✅ Initialize the map
+
+				for _, j := range observation.JobResponses {
+					observationMap[j.JobId] = append(observationMap[j.JobId], j) // ✅ No nil dereference
+				}
+
+				re.observations.Store(msg.FromId, observationMap)
+
 			} else {
 				re.logger.Errorf("RE: observe res msg incorreclty / not signed; dropping..")
 				return nil
@@ -370,7 +388,163 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 		}
 
 		return nil
+	case rpc.BroadcastObservationMap:
+		// Step 1: Extract and Unmarshal Observations
+		observationMap := msg.Data.(rpc.BroadcastObservationMap).Observations
 
+		var obsMap ObservationSafeMap
+		if err := obsMap.UnmarshalJSON(observationMap); err != nil {
+			re.logger.Errorf("RE: error unmarshalling observation map: %v", err)
+			return err
+		}
+
+		// Step 2: Persist observations in cache layer
+		// TODO: fix issue: assignment copies lock value to re.cacheLayer.follower_observations: eavesdrop/ocr.ObservationSafeMap contains sync.Map contains sync.Mutex
+		re.cacheLayer.follower_observations = obsMap
+
+		return nil
+
+	case rpc.ReportReq:
+		// will be received by followers
+
+		// some docs: leader sends us observations of all the
+		// jobs for current round for all peers
+		// []{peerID: []{jobID: observed_value}}
+
+		// what follower needs to send is the final reporting value of the each job
+		// []{jobID: finalValue}
+
+		// Step 1: Extract and Unmarshal Observations
+		observationMap := msg.Data.(rpc.ReportReq).Observations
+
+		var obsMap ObservationSafeMap
+		if err := obsMap.UnmarshalJSON(observationMap); err != nil {
+			re.logger.Errorf("RE: error unmarshalling observation map: %v", err)
+			return err
+		}
+
+		// compare OM recevied in the reportReq with the OM broadcasted by the leader
+		cacheObsData, _ := re.cacheLayer.follower_observations.MarshalJSON()
+		if !utils.CompareHashes([][]byte{observationMap, cacheObsData}) {
+			re.logger.Errorf("RE: OM in reportReq and broadcasted OM do not match")
+			return nil
+		}
+
+		// Step 2: Reorganize observations by jobID
+		jobObservations := make(map[string][]jobs.JobObservationResponse) // jobID -> all peer observations
+
+		obsMap.Iterate(func(peerID string, peerObservations map[string][]jobs.JobObservationResponse) bool {
+			for jobID, observations := range peerObservations {
+				jobObservations[jobID] = append(jobObservations[jobID], observations...)
+			}
+			return true // Continue iteration
+		})
+
+		// Step 3: Process observations and generate final report
+		jobReportValues := make(rpc.JobReports) // jobID -> final reported value
+
+		for jobID, observations := range jobObservations {
+			job := (*re.jobRegistry)[jobID]
+			finalValue, err := job.Assemble(observations)
+			if err != nil {
+				re.logger.Errorf("RE: error assembling job %s: %v", jobID, err)
+				continue // Skip problematic job
+			}
+			jobReportValues[jobID] = finalValue
+		}
+
+		// persist in cache layer
+		re.cacheLayer.jobReports = jobReportValues
+
+		// Step 4: Send report back to the leader
+		reportRes := rpc.ReportRes{
+			Epoch:   re.epoch,
+			Round:   uint64(re.curRound),
+			Leader:  re.leader,
+			Reports: jobReportValues,
+		}
+
+		// signing reportMsg
+		msgBytes, err := reportRes.Bytes(re.serverOpts.Codec)
+		if err != nil {
+			re.logger.Errorf("RE: err converting to bytes")
+			return nil
+		}
+
+		signature, err := re.SignMessage(msgBytes)
+		if err != nil {
+			re.logger.Errorf("RE: err signing msg bytes")
+			return nil
+		}
+
+		// constructing msg
+		rpcMsg, err := rpc.NewRPCMessageBuilder(
+			utils.NetAddr(re.serverOpts.Addr),
+			re.serverOpts.Codec,
+			re.serverOpts.ID,
+		).SetHeaders(
+			rpc.MessageReportRes,
+		).SetTopic(
+			rpc.Reporter,
+		).SetPayload(reportRes).SetSignature(signature).Bytes()
+
+		if err != nil {
+			panic(err)
+		}
+
+		re.msgService.SendMsg(re.leader, rpcMsg)
+
+		return nil
+
+	case rpc.ReportRes:
+		// will be received by the leader (from the followers)
+		reports := msg.Data.(rpc.ReportRes)
+
+		// verify the msg signature
+		msgBytes, err := reports.Bytes(re.serverOpts.Codec)
+		if err != nil {
+			re.logger.Errorf("RE: err converting to bytes")
+			return nil
+		}
+
+		var pk c.PublicKey
+		if pk, err = c.StringToPublicKey(msg.FromId); err != nil {
+			re.logger.Errorf("RE: err casting strng to pk")
+			return nil
+		}
+
+		isSigned := msg.Signature.Verify(msgBytes, pk)
+		if isSigned {
+			// add reports to the leader state
+			report := Report{
+				sig:     msg.Signature,
+				from:    msg.FromId,
+				reports: reports.Reports,
+			}
+			re.reports = append(re.reports, report)
+
+			// we have received n reports; byzantine tolernace surpassed
+			// we can't assemble report after just f+1, since if the hashes are different, we need to move to the next round
+			// we are wiating for all responses so taht if any f+1/n agree on the report, we can assemble the final report
+			if len(re.reports) >= int(re.pacemakerGlobals.n) {
+				// cReached -> consensus reached
+				finalR, cReached := re.assembleFinalReport()
+				if cReached {
+					re.finalReport = finalR
+					// phase change
+					re.Phase = PhaseFinal
+					re.LeaderState.phaseCh <- PhaseFinal
+				} else {
+					// TODO: move to next round
+				}
+			}
+
+		} else {
+			re.logger.Errorf("RE: report res msg incorreclty / not signed; dropping..")
+			return nil
+		}
+
+		return nil
 	default:
 		re.logger.Errorf("RE: unknown message type: %v", reflect.TypeOf(msg.Data))
 		return nil

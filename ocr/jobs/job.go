@@ -41,6 +41,7 @@ type Job interface {
 	Result() ([]byte, error)      // run computes teh result and stores it into the job DS and the result is accessible via this func
 	TaskTimeout() time.Duration   // timeout for job computation, if not completed by then, the job is killed
 	Listen(chan JobEventResponse) // listen for events, if any and update over channel passed as input
+	ReportAssembler
 }
 
 // NewJobFromInfo creates a concrete job instance from JobInfo
