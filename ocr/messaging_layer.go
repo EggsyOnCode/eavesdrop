@@ -9,4 +9,5 @@ type MessagingLayer interface {
 	SendMsg(id string, msg []byte) error
 	BroadcastMsg(msg []byte) error
 	GetCodec() *rpc.Codec
+	IsPeer(id string) bool
 }

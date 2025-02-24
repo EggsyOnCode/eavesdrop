@@ -6,6 +6,7 @@ import (
 	"eavesdrop/ocr/jobs"
 	"eavesdrop/rpc"
 	"eavesdrop/utils"
+	"fmt"
 	"reflect"
 	"sync"
 	"time"
@@ -45,6 +46,7 @@ type CacheLayer struct {
 	jobs                  []jobs.Job
 	jobReports            rpc.JobReports
 	follower_observations ObservationSafeMap // observation map broadcasted by the leader to all followers before REPORT_REQ msg
+	c_finalReport         rpc.FinalReport    // final report broadcasted by the leader to all followers before FINAL msg
 }
 
 type GeneralState struct {
@@ -208,6 +210,7 @@ func (re *ReportingEngine) AttachMsgLayer(msgService MessagingLayer) {
 
 // all messages with say topic Reporter will be routed to repoter.ProcessMessage, now this msgs could be of any type , like leader senidng msg, braodcsating something, an oracle submitting an observation (all of these msgs should be defiend in rpc_leader.go inside rpc pkg i think), so reporter.ProcessMessage could either handle all of them itself and update the state of the RE glovally or it could delegrate, for now, lets shouild build a monolithic RPC handler for reptoer inside ProcessMessgae
 func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
+	// TODO: if the msg recived has a phase number different from the current phase, then ignore the msg
 	switch msg.Data.(type) {
 	case rpc.ObserveReq:
 		//shall only be recevied by followers
@@ -545,6 +548,72 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 		}
 
 		return nil
+
+	case rpc.BroadcastFinalReport:
+		// Only followers receive this
+
+		// Step 1: Extract and Unmarshal Final Report
+		finalReportMsg := msg.Data.(rpc.BroadcastFinalReport)
+
+		msgBytes, err := finalReportMsg.Bytes(re.serverOpts.Codec)
+		if err != nil {
+			re.logger.Errorf("RE: err converting to bytes")
+			return nil
+		}
+
+		// Step 2: Verify leader's signature
+		isSigned, err := VerifySignature(msgBytes, msg.FromId, msg.Signature)
+		if err != nil || !isSigned {
+			re.logger.Errorf("RE: err verifying leader's signature")
+			return nil
+		}
+
+		// Step 3: Verify f+1 signatures from validators
+		validSignatures := 0
+		threshold := int(re.pacemakerGlobals.f) + 1
+		uniqueValidators := make(map[string]bool) // Track unique signers
+
+		for _, signatory := range finalReportMsg.Signatories {
+			pk, err := c.StringToPublicKey(signatory.ID)
+			if err != nil {
+				re.logger.Errorf("RE: err converting string to public key")
+				return nil
+			}
+
+			// also verify if signatory is a valid peer in our network
+			if !re.msgService.IsPeer(signatory.ID) {
+				re.logger.Errorf("RE: signatory is not a valid peer")
+				return nil
+			}
+
+			if signatory.Sign.Verify(msgBytes, pk) {
+
+				// Ensure unique validators are counted
+				if !uniqueValidators[signatory.ID] {
+					uniqueValidators[signatory.ID] = true
+					validSignatures++
+				}
+			}
+
+			// Stop early if we reach f+1 valid signatures
+			if validSignatures >= threshold {
+				break
+			}
+		}
+
+		if validSignatures < threshold {
+			re.logger.Errorf("RE: insufficient valid signatures, expected at least %d but got %d", threshold, validSignatures)
+			return nil
+		}
+
+		re.logger.Infof("RE: Final report verified successfully with %d signatures", validSignatures)
+
+		// Step 4: Persist final report in cache layer
+		re.cacheLayer.c_finalReport = finalReportMsg.FinalReport
+
+
+		return nil
+
 	default:
 		re.logger.Errorf("RE: unknown message type: %v", reflect.TypeOf(msg.Data))
 		return nil
@@ -570,4 +639,20 @@ func (re *ReportingEngine) cleanupFunc() {
 func (re *ReportingEngine) SignMessage(msg []byte) (c.Signature, error) {
 	sign, err := re.signer.Sign(msg)
 	return *sign, err
+}
+
+// VerifySignature checks if the given message's signature is valid.
+func VerifySignature(msgBytes []byte, fromID string, signature c.Signature) (bool, error) {
+	// Convert the string ID to a PublicKey
+	pk, err := c.StringToPublicKey(fromID)
+	if err != nil {
+		return false, fmt.Errorf("failed to convert string to public key")
+	}
+
+	// Verify the signature
+	if !signature.Verify(msgBytes, pk) {
+		return false, fmt.Errorf("signature verification failed")
+	}
+
+	return true, nil
 }

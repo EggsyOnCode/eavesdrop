@@ -239,3 +239,11 @@ func (s *Server) GetPeerCount() int {
 // 	// which is used by the OCR to keep track of connected peers
 // 	s.peerCountChan <- connected
 // }
+
+func (s *Server) IsPeer(id string) bool {
+	s.peerLock.RLock()
+	defer s.peerLock.RUnlock()
+
+	_, ok := s.peers.Get(id)
+	return ok
+}

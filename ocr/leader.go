@@ -26,7 +26,7 @@ type Observation []byte
 type LeaderState struct {
 	// map of peerIds to job responses
 	observations      ObservationSafeMap // signed observations received in OBSERVE messages
-	finalReport       rpc.JobReports     // final report to be sent in FINAL message
+	finalReport       *rpc.FinalReport   // final report to be sent in FINAL message
 	reports           []Report           // attested reports received in REPORT messages
 	TimerRoundTimeout *Timer             // timer Tround with timeout duration ∆round , initially stopped
 	TimerGrace        *Timer             // timer Tgrace with timeout duration ∆grace , initially stopped
@@ -141,6 +141,48 @@ func (re *ReportingEngine) handleFinal() {
 	// handle the FINAL phase
 	// will have to listen to the FINAL messages from the leader
 	// and update the state accordingly
+
+	// construct and sign BroadcastFinalReport msg to all followers
+	if re.finalReport == nil {
+		re.logger.Errorf("RE: final report is empty, cannot proceed to FINAL phase")
+		return
+	}
+	finalRepMsg := rpc.BroadcastFinalReport{
+		Epoch:       re.epoch,
+		Leader:      re.leader,
+		Round:       uint64(re.curRound),
+		FinalReport: *re.finalReport,
+	}
+
+	// signing observeMsg
+	msgBytes, err := finalRepMsg.Bytes(re.serverOpts.Codec)
+	if err != nil {
+		re.logger.Errorf("RE: err converting to bytes")
+		return
+	}
+
+	signature, err := re.SignMessage(msgBytes)
+	if err != nil {
+		re.logger.Errorf("RE: err signing msg bytes")
+		return
+	}
+
+	// constructing msg
+	rpcMsg, err := rpc.NewRPCMessageBuilder(
+		utils.NetAddr(re.serverOpts.Addr),
+		re.serverOpts.Codec,
+		re.serverOpts.ID,
+	).SetHeaders(
+		rpc.MessageReportReq,
+	).SetTopic(
+		rpc.Reporter,
+	).SetPayload(finalRepMsg).SetSignature(signature).Bytes()
+
+	if err != nil {
+		panic(err)
+	}
+
+	re.msgService.BroadcastMsg(rpcMsg)
 }
 
 func (re *ReportingEngine) GetJobInfosForCurrRound() []jobs.JobInfo {
@@ -190,15 +232,16 @@ func (re *ReportingEngine) broadcastObservationMap(data []byte) error {
 	return nil
 }
 
-func (re *ReportingEngine) assembleFinalReport() (rpc.JobReports, bool) {
+func (re *ReportingEngine) assembleFinalReport() (*rpc.FinalReport, bool) {
 	// will be called by the leader
-	// compare hashes of all teh reports obtained in more than f+1 the REPORT_RES msgs
-	// if for f+1/n nodes , teh hash is same, then the final report is valid
+	// compare hashes of all the reports obtained in more than f+1 REPORT_RES msgs
+	// if for f+1/n nodes, the hash is same, then the final report is valid
 	// if not, then the final report is invalid and move to next round
-	// finalreport is Data , signature[] of all f+1 nodes
+	// final report consists of Data and at least f+1 signatories
 
-	jobHashCount := make(map[string]map[[32]byte]int)  // jobID -> (hash -> count)
-	jobFinalReports := make(map[string]rpc.JobReports) // jobID -> final report
+	jobHashCount := make(map[string]map[[32]byte]int)               // jobID -> (hash -> count)
+	jobFinalReports := make(map[string]map[[32]byte]rpc.JobReports) // jobID -> (hash -> final report)
+	hashSignatories := make(map[[32]byte][]rpc.Signatories)         // hash -> list of signatories
 
 	// Iterate over all received reports
 	for _, report := range re.reports {
@@ -213,18 +256,24 @@ func (re *ReportingEngine) assembleFinalReport() (rpc.JobReports, bool) {
 			// Compute hash of response
 			hash := sha256.Sum256(responseBytes)
 
-			// Initialize hash count map for the job if not already present
+			// Initialize job's hash count map if not present
 			if jobHashCount[jobID] == nil {
 				jobHashCount[jobID] = make(map[[32]byte]int)
+				jobFinalReports[jobID] = make(map[[32]byte]rpc.JobReports)
 			}
 
 			// Increment count of this hash for the job
 			jobHashCount[jobID][hash]++
 
-			// Store the report corresponding to this hash (only once per unique hash)
-			if _, exists := jobFinalReports[jobID]; !exists {
-				jobFinalReports[jobID] = report.reports
+			// Store the corresponding report for this hash
+			jobFinalReports[jobID][hash] = report.reports
+
+			// Store signatory (includes both public key & signature)
+			signatory := rpc.Signatories{
+				Sign: report.sig,
+				ID:    report.from, // Public key of the signer
 			}
+			hashSignatories[hash] = append(hashSignatories[hash], signatory)
 		}
 	}
 
@@ -232,21 +281,33 @@ func (re *ReportingEngine) assembleFinalReport() (rpc.JobReports, bool) {
 	threshold := int(re.pacemakerGlobals.f) + 1
 
 	// Construct final report
-	finalReport := make(rpc.JobReports)
+	finalJobReports := make(rpc.JobReports)
+	finalSignatories := []rpc.Signatories{}
+
 	for jobID, hashCounts := range jobHashCount {
-		for _, count := range hashCounts {
+		for hash, count := range hashCounts {
 			if count >= threshold {
-				// Found consensus on this job’s response
-				finalReport[jobID] = jobFinalReports[jobID][jobID]
+				// Found consensus for this job
+				finalJobReports[jobID] = jobFinalReports[jobID][hash][jobID]
+
+				// Collect f+1 valid signatories
+				signatories := hashSignatories[hash]
+				if len(signatories) >= threshold {
+					finalSignatories = append(finalSignatories, signatories[:threshold]...)
+				}
 				break // Move to next jobID
 			}
 		}
 	}
 
-	// If final report is empty, no consensus reached
-	if len(finalReport) == 0 {
+	// If no consensus reached
+	if len(finalJobReports) == 0 || len(finalSignatories) < threshold {
 		return nil, false
 	}
 
-	return finalReport, true
+	// Return FinalReport
+	return &rpc.FinalReport{
+		Report:      finalJobReports,
+		Signatories: finalSignatories, // Include f+1 signatories
+	}, true
 }

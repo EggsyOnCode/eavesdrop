@@ -1,6 +1,9 @@
 package rpc
 
-import "eavesdrop/ocr/jobs"
+import (
+	"eavesdrop/crypto"
+	"eavesdrop/ocr/jobs"
+)
 
 // collection of rpc messages for Reporter Protocol instance
 type ObserveReq struct {
@@ -40,6 +43,15 @@ func (rr *ReportReq) Bytes(c Codec) ([]byte, error) {
 
 type JobReports map[string]interface{}
 
+type Signatories struct {
+	Sign crypto.Signature
+	ID    string // public key
+}
+type FinalReport struct {
+	Report      JobReports
+	Signatories []Signatories // f+1 signatories
+}
+
 type ReportRes struct {
 	Epoch   uint64     `json:"epoch"`
 	Round   uint64     `json:"round"`
@@ -61,4 +73,15 @@ type BroadcastObservationMap struct {
 
 func (om *BroadcastObservationMap) Bytes(c Codec) ([]byte, error) {
 	return c.Encode(om)
+}
+
+type BroadcastFinalReport struct {
+	Epoch       uint64 `json:"epoch"`
+	Round       uint64 `json:"round"`
+	Leader      string `json:"leader"`
+	FinalReport `json:"finalReport"`
+}
+
+func (fr *BroadcastFinalReport) Bytes(c Codec) ([]byte, error) {
+	return c.Encode(fr)
 }
