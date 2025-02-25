@@ -28,6 +28,10 @@ const (
 
 type DirectReqReportGenParms struct {
 	Strategy ReportingStrategy `toml:"strategy"`
+	// if numeric, treat all vals as float64, if json, treat is as raw json and receive json schema as string as well,
+	// if string, keep it plain string
+	ResultType string `toml:"resultType,omitempty"` // e.g., "numeric", "json", "string"
+	Schema     string `toml:"schema,omitempty"`     // JSON schema as string (if ResultType is "json")
 }
 
 type DirectReqTask struct {
@@ -100,7 +104,7 @@ func (dr *DirectRequest) Run(ctx context.Context) error {
 	}
 
 	// Select reporting strategy
-	reporter, err := NewReportAssembler(dr.params.ReportingStrategy.Strategy)
+	reporter, err := NewReportAssembler(dr.params.ReportingStrategy.Strategy, dr)
 	if err != nil {
 		logger.Get().Sugar().Errorf("failed to create report assembler: %v", err)
 		return err

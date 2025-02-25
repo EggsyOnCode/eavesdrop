@@ -151,6 +151,7 @@ func (re *ReportingEngine) handleFinal() {
 		re.logger.Errorf("RE: final report is empty, cannot proceed to FINAL phase")
 		return
 	}
+
 	finalRepMsg := rpc.BroadcastFinalReport{
 		Epoch:       re.epoch,
 		Leader:      re.leader,

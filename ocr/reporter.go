@@ -398,6 +398,8 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 		return nil
 	case rpc.BroadcastObservationMap:
+		// received by followers from leader
+
 		// Step 1: Extract and Unmarshal Observations
 		observationMap := msg.Data.(rpc.BroadcastObservationMap).Observations
 
