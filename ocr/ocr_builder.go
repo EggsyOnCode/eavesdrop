@@ -6,13 +6,7 @@ import (
 )
 
 type OCRBuilder struct {
-	transmitter Transmitter
 	codec       rpc.Codec
-}
-
-func (b *OCRBuilder) WithTransmitter(transmitter Transmitter) *OCRBuilder {
-	b.transmitter = transmitter
-	return b
 }
 
 func (b *OCRBuilder) WithCodec(codec rpc.Codec) *OCRBuilder {
@@ -21,7 +15,7 @@ func (b *OCRBuilder) WithCodec(codec rpc.Codec) *OCRBuilder {
 }
 
 func (b *OCRBuilder) Build() (*OCR, error) {
-	if b.transmitter == nil || b.codec == nil {
+	if b.codec == nil {
 		return nil, fmt.Errorf("missing required components")
 	}
 

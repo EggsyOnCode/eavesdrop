@@ -1,29 +1,27 @@
 package ocr
 
-import "eavesdrop/rpc"
+import "eavesdrop/ocr/jobs"
 
-type TransmitterRegistry struct {
-	Transmitters map[string]Transmitter // i.e  keys are JobIDs
+// one tranmistter instance for each job
+type Transmitter struct {
+	epoch  uint64
+	round  uint64
+	leader string
+	job    jobs.Job
 }
 
-type Transmitter interface {
-	// TODO: signature of this func is yet to be decided
-	Transmit() error
-	ProcessMessage(msg *rpc.DecodedMsg) error
+func NewTransmitter(e, r uint64, l string, j jobs.Job) *Transmitter {
+	return &Transmitter{
+		epoch:  e,
+		round:  r,
+		leader: l,
+		job:    j,
+	}
 }
 
-// implemetns both the Transmitter and rpc.RPCProcessor interface
-type MyTransmitter struct {
-	// ... fields to be added
-	Codec rpc.Codec
-}
+// write-only channel
+func (t *Transmitter) Transmit(done chan<-bool) {
 
-func (t *MyTransmitter) Transmit() error {
-	// ... implementation to be added
-	return nil
-}
-
-func (t *MyTransmitter) ProcessMessage(msg *rpc.DecodedMsg) error {
-	// ... implementation to be added
-	return nil
+	// signal completion
+	done <- true
 }

@@ -128,6 +128,9 @@ func (re *ReportingEngine) Start(recEvents *fifo.Queue, jobReg *map[string]jobs.
 	// if non-leader: will listen to rpc msgs from the leader and handle them accordingly
 	// in fact a meta-seprator can be used where if hte re is a leader, launcha main listener in a go routine and then launch a phase handler in a go routine
 	// if non-leader, launch a main listener in a separate go routine
+
+	// pacemaker will read jobs from a reader (say a file / dir / networ)
+	// and cast them into jobs.Job and return a map regsitry such that jobId -> Job
 	re.jobRegistry = jobReg
 
 	if re.isLeader {
@@ -170,6 +173,8 @@ free:
 				go re.handleReport()
 			case PhaseFinal:
 				go re.handleFinal()
+			case PhaseTransmit:
+				go re.handleTransmit()
 			}
 
 		case <-re.quitCh:
@@ -211,6 +216,7 @@ func (re *ReportingEngine) AttachMsgLayer(msgService MessagingLayer) {
 // all messages with say topic Reporter will be routed to repoter.ProcessMessage, now this msgs could be of any type , like leader senidng msg, braodcsating something, an oracle submitting an observation (all of these msgs should be defiend in rpc_leader.go inside rpc pkg i think), so reporter.ProcessMessage could either handle all of them itself and update the state of the RE glovally or it could delegrate, for now, lets shouild build a monolithic RPC handler for reptoer inside ProcessMessgae
 func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 	// TODO: if the msg recived has a phase number different from the current phase, then ignore the msg
+	// TODO: also if the msg's curr round or epoch is diff, handle that accordingly
 	switch msg.Data.(type) {
 	case rpc.ObserveReq:
 		//shall only be recevied by followers
@@ -611,6 +617,40 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 		// Step 4: Persist final report in cache layer
 		re.cacheLayer.c_finalReport = finalReportMsg.FinalReport
 
+		// send a FINAL echo back to leader
+		if err := re.sendFinalReportEcho(); err != nil {
+			re.logger.Errorf("RE: err sending final report echo")
+			return nil
+		}
+
+		return nil
+
+	case rpc.FinalEcho:
+		// received by the leader only
+
+		finalEcho := msg.Data.(rpc.FinalEcho)
+		if (finalEcho.Epoch != re.epoch) || (finalEcho.Round != uint64(re.curRound) || (finalEcho.Leader != re.leader)) {
+			re.logger.Errorf("RE: final echo msg for wrong epoch or round")
+			return nil
+		}
+
+		// verify the msg signature and check valid peer
+		msgBytes, err := finalEcho.Bytes(re.serverOpts.Codec)
+		if err != nil {
+			re.logger.Errorf("RE: err converting to bytes")
+			return nil
+		}
+		signed := re.VerifySigAndPeer(msgBytes, msg.FromId, msg.Signature)
+		if signed {
+			re.finalReportAttestation++
+
+			if re.finalReportAttestation >= uint(re.pacemakerGlobals.f)+1 {
+				// change phase to Transmittion
+			}
+		} else {
+			re.logger.Errorf("RE: final echo msg not signed or not a valid peer")
+			return nil
+		}
 
 		return nil
 
@@ -655,4 +695,66 @@ func VerifySignature(msgBytes []byte, fromID string, signature c.Signature) (boo
 	}
 
 	return true, nil
+}
+
+func (re *ReportingEngine) sendFinalReportEcho() error {
+
+	// Step 4: Send report back to the leader
+	reportRes := rpc.FinalEcho{
+		Epoch:  re.epoch,
+		Round:  uint64(re.curRound),
+		Leader: re.leader,
+	}
+
+	// signing reportMsg
+	msgBytes, err := reportRes.Bytes(re.serverOpts.Codec)
+	if err != nil {
+		re.logger.Errorf("RE: err converting to bytes")
+		return err
+	}
+
+	signature, err := re.SignMessage(msgBytes)
+	if err != nil {
+		re.logger.Errorf("RE: err signing msg bytes")
+		return err
+	}
+
+	// constructing msg
+	rpcMsg, err := rpc.NewRPCMessageBuilder(
+		utils.NetAddr(re.serverOpts.Addr),
+		re.serverOpts.Codec,
+		re.serverOpts.ID,
+	).SetHeaders(
+		rpc.MessageFinalEcho,
+	).SetTopic(
+		rpc.Reporter,
+	).SetPayload(reportRes).SetSignature(signature).Bytes()
+
+	if err != nil {
+		return err
+	}
+
+	re.msgService.SendMsg(re.leader, rpcMsg)
+
+	return nil
+}
+
+func (re *ReportingEngine) VerifySigAndPeer(msg []byte, fromID string, sign c.Signature) bool {
+	// convert the string ID to a PublicKey
+	pk, err := c.StringToPublicKey(fromID)
+	if err != nil {
+		return false
+	}
+
+	// verify the signature
+	ifSigned := sign.Verify(msg, pk)
+
+	var isPeer bool
+	// check if the peer is a valid peer in our network
+	if !re.msgService.IsPeer(fromID) {
+		isPeer = false
+	}
+
+	return ifSigned && isPeer
+
 }

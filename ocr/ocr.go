@@ -17,11 +17,10 @@ type OCRCtx struct {
 }
 
 type OCR struct {
-	ctx         *OCRCtx
-	Transmitter *Transmitter // a singular instnace is enough
-	Codec       rpc.Codec
-	Pacemaker   *Pacemaker // always running
-	Server      *Server
+	ctx       *OCRCtx
+	Codec     rpc.Codec
+	Pacemaker *Pacemaker // always running
+	Server    *Server
 	// job processor / job scheduler / job registry
 	// we need redis caching layer to cache jobs based on their triggers
 	// because we need a job scheduler to schedule jobs based on their triggers

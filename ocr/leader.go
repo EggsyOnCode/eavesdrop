@@ -6,17 +6,20 @@ import (
 	"eavesdrop/rpc"
 	"eavesdrop/utils"
 	"encoding/json"
+	"fmt"
+	"sync"
 	"time"
 )
 
 type LeaderPhase byte
 
 const (
-	PhaseNil     LeaderPhase = 0xff
-	PhaseObserve LeaderPhase = 0x0
-	PhaseGrace   LeaderPhase = 0x1
-	PhaseReport  LeaderPhase = 0x2
-	PhaseFinal   LeaderPhase = 0x3
+	PhaseNil      LeaderPhase = 0xff
+	PhaseObserve  LeaderPhase = 0x0
+	PhaseGrace    LeaderPhase = 0x1
+	PhaseReport   LeaderPhase = 0x2
+	PhaseFinal    LeaderPhase = 0x3
+	PhaseTransmit LeaderPhase = 0x4
 
 	DURATION_BW_OM_REPORT_REQ int = 5
 )
@@ -25,13 +28,14 @@ type Observation []byte
 
 type LeaderState struct {
 	// map of peerIds to job responses
-	observations      ObservationSafeMap // signed observations received in OBSERVE messages
-	finalReport       *rpc.FinalReport   // final report to be sent in FINAL message
-	reports           []Report           // attested reports received in REPORT messages
-	TimerRoundTimeout *Timer             // timer Tround with timeout duration ∆round , initially stopped
-	TimerGrace        *Timer             // timer Tgrace with timeout duration ∆grace , initially stopped
-	Phase             LeaderPhase        // current phase of the leader
-	phaseCh           chan LeaderPhase
+	observations           ObservationSafeMap // signed observations received in OBSERVE messages
+	finalReport            *rpc.FinalReport   // final report to be sent in FINAL message
+	reports                []Report           // attested reports received in REPORT messages
+	finalReportAttestation uint               // number of attestations received for final report
+	TimerRoundTimeout      *Timer             // timer Tround with timeout duration ∆round , initially stopped
+	TimerGrace             *Timer             // timer Tgrace with timeout duration ∆grace , initially stopped
+	Phase                  LeaderPhase        // current phase of the leader
+	phaseCh                chan LeaderPhase
 }
 
 func (re *ReportingEngine) handleObserve() {
@@ -173,7 +177,7 @@ func (re *ReportingEngine) handleFinal() {
 		re.serverOpts.Codec,
 		re.serverOpts.ID,
 	).SetHeaders(
-		rpc.MessageReportReq,
+		rpc.MessageFinalReport,
 	).SetTopic(
 		rpc.Reporter,
 	).SetPayload(finalRepMsg).SetSignature(signature).Bytes()
@@ -232,6 +236,52 @@ func (re *ReportingEngine) broadcastObservationMap(data []byte) error {
 	return nil
 }
 
+func (re *ReportingEngine) handleTransmit() {
+	// ignore jobValue since all we need to do is get corresponding job for each jobID in finalReport
+	var jobs []jobs.Job
+	for jobId, _ := range re.finalReport.Report {
+		job, ok := (*re.jobRegistry)[jobId]
+		if !ok {
+			re.logger.Errorf("RE: job not found in registry")
+			return
+		}
+
+		jobs = append(jobs, job)
+	}
+
+	// create Transmitter for each job, launch transmission in goroutine,
+	// and use chan to track results / status and comm back to followers
+
+	var wg sync.WaitGroup
+	statusChan := make(chan bool, len(jobs)) // Buffered to prevent blocking
+
+	for _, job := range jobs {
+		wg.Add(1)
+
+		// Create a new transmitter
+		transmitter := NewTransmitter(re.epoch, uint64(re.curRound), re.leader, job)
+
+		// Launch each transmitter in a goroutine
+		go func(t *Transmitter) {
+			defer wg.Done()
+			t.Transmit(statusChan)
+		}(transmitter)
+	}
+
+	// Wait for all goroutines to finish
+	wg.Wait()
+	close(statusChan)
+
+	// Process results
+	for status := range statusChan {
+		fmt.Println("Transmission completed:", status)
+	}
+
+	//TODO: if all successful send a suc rpc msg to notify all followers that transmision is completed
+	// leader after doing this signals nextRound
+	// followers reciving will verify using txHash etc.. teh validity of this claim and move on to next round
+}
+
 func (re *ReportingEngine) assembleFinalReport() (*rpc.FinalReport, bool) {
 	// will be called by the leader
 	// compare hashes of all the reports obtained in more than f+1 REPORT_RES msgs
@@ -271,7 +321,7 @@ func (re *ReportingEngine) assembleFinalReport() (*rpc.FinalReport, bool) {
 			// Store signatory (includes both public key & signature)
 			signatory := rpc.Signatories{
 				Sign: report.sig,
-				ID:    report.from, // Public key of the signer
+				ID:   report.from, // Public key of the signer
 			}
 			hashSignatories[hash] = append(hashSignatories[hash], signatory)
 		}

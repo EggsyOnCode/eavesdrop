@@ -17,6 +17,8 @@ const (
 	MessageReportReq      MessageType = 0x6
 	MessageReportRes      MessageType = 0x7
 	MessageObservationMap MessageType = 0x8
+	MessageFinalReport    MessageType = 0x9
+	MessageFinalEcho      MessageType = 0x10
 
 	Pacemaker MesageTopic = iota
 	Reporter  MesageTopic = 0x1

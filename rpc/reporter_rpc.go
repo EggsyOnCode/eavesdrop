@@ -41,6 +41,7 @@ func (rr *ReportReq) Bytes(c Codec) ([]byte, error) {
 	return c.Encode(rr)
 }
 
+// jobId -> final report value
 type JobReports map[string]interface{}
 
 type Signatories struct {
@@ -84,4 +85,14 @@ type BroadcastFinalReport struct {
 
 func (fr *BroadcastFinalReport) Bytes(c Codec) ([]byte, error) {
 	return c.Encode(fr)
+}
+
+type FinalEcho struct {
+	Epoch  uint64 `json:"epoch"`
+	Round  uint64 `json:"round"`
+	Leader string `json:"leader"`
+}
+
+func (fe *FinalEcho) Bytes(c Codec) ([]byte, error) {
+	return c.Encode(fe)
 }
