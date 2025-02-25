@@ -87,35 +87,19 @@ func (dr *DirectRequest) Payload() interface{} {
 }
 
 func (dr *DirectRequest) Run(ctx context.Context) error {
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(dr.params.ObservationSource))
-
 	for _, task := range dr.params.ObservationSource {
-		wg.Add(1)
-		go func(task DirectReqTask) {
-			defer wg.Done()
-			select {
-			case <-ctx.Done():
-				errChan <- fmt.Errorf("execution cancelled: %v", ctx.Err())
-				return
-			default:
-				if err := dr.Execute(task); err != nil {
-					errChan <- fmt.Errorf("error executing task %s: %v", task.Name, err)
-				}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("execution cancelled: %v", ctx.Err())
+		default:
+			// Execute the task and store results in `dr.Results`
+			if err := dr.Execute(task); err != nil {
+				return fmt.Errorf("error executing task %s: %v", task.Name, err)
 			}
-		}(task)
-	}
-
-	wg.Wait()
-	close(errChan)
-
-	for err := range errChan {
-		if err != nil {
-			return err
 		}
 	}
 
-	// select reporting strategy
+	// Select reporting strategy
 	reporter, err := NewReportAssembler(dr.params.ReportingStrategy.Strategy)
 	if err != nil {
 		logger.Get().Sugar().Errorf("failed to create report assembler: %v", err)
@@ -163,6 +147,8 @@ func (dr *DirectRequest) Execute(task DirectReqTask) error {
 			return err
 		}
 
+		log.Printf("http result is %v", string(body))
+
 		dr.Results[task.Name] = string(body)
 
 	case "json":
@@ -181,10 +167,13 @@ func (dr *DirectRequest) Execute(task DirectReqTask) error {
 			return fmt.Errorf("key %s not found in JSON", task.Path)
 		}
 
+		log.Printf("json result is %v", value)
+
 		dr.Results[task.Name] = value
 
 	case "math":
 		input, ok := dr.Results[task.Input].(float64)
+		log.Printf("input val is %v", input)
 		if !ok {
 			if str, isStr := dr.Results[task.Input].(string); isStr {
 				num, err := strconv.ParseFloat(str, 64)
@@ -196,6 +185,8 @@ func (dr *DirectRequest) Execute(task DirectReqTask) error {
 				return fmt.Errorf("invalid input for math operation: %s", task.Input)
 			}
 		}
+
+		log.Printf("math result is %v", input*task.Factor)
 
 		dr.Results[task.Name] = input * task.Factor
 

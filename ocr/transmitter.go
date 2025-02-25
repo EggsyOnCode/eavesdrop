@@ -1,6 +1,9 @@
 package ocr
 
-import "eavesdrop/ocr/jobs"
+import (
+	"eavesdrop/logger"
+	"eavesdrop/ocr/jobs"
+)
 
 // one tranmistter instance for each job
 type Transmitter struct {
@@ -20,8 +23,10 @@ func NewTransmitter(e, r uint64, l string, j jobs.Job) *Transmitter {
 }
 
 // write-only channel
-func (t *Transmitter) Transmit(done chan<-bool) {
+func (t *Transmitter) Transmit(done chan<- bool) {
+	l := logger.Get().Sugar()
 
+	l.Infof("TE: tranmitting value to on-chain contract")
 	// signal completion
 	done <- true
 }

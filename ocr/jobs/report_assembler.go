@@ -20,5 +20,7 @@ func NewReportAssembler(strategy ReportingStrategy) (ReportAssembler, error) {
 type MeanValueAssembler struct{}
 
 func (mva *MeanValueAssembler) Assemble(obs []JobObservationResponse) ([]byte, error) {
+
+
 	return nil, nil
 }

@@ -22,6 +22,9 @@ externalJobId = "8aa49abd-0437-4eca-8fd4-84e11119fb0b"
 name = "minimal eth request"
 contractAddress = "0x1234567890abcdef1234567890abcdef12345678"
 
+[reporting]
+strategy = "mean"
+
 [[observationSource]]
 name = "fetch_data"
 type = "http"
@@ -84,6 +87,7 @@ func TestDirectReqTomlConfigReader(t *testing.T) {
 	assert.Equal(t, "8aa49abd-0437-4eca-8fd4-84e11119fb0b", job.ID())
 	assert.NoError(t, job.Run(context.Background()))
 	result, err := job.Result()
+	t.Logf("r is %v", result)
 	assert.NoError(t, err)
 
 	// Get the ETH price in USD
@@ -95,5 +99,6 @@ func TestDirectReqTomlConfigReader(t *testing.T) {
 	t.Log(job.Payload())
 
 	assert.Equal(t, DirectReqJob, job.Type())
+	assert.Equal(t, MeanCalc, job.Payload().(DirectRequestTemplateParams).ReportingStrategy.Strategy)
 	assert.Equal(t, "0x1234567890abcdef1234567890abcdef12345678", job.Payload().(DirectRequestTemplateParams).ContractAddress.String())
 }
