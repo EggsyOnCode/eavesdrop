@@ -281,6 +281,47 @@ func (re *ReportingEngine) handleTransmit() {
 	//TODO: if all successful send a suc rpc msg to notify all followers that transmision is completed
 	// leader after doing this signals nextRound
 	// followers reciving will verify using txHash etc.. teh validity of this claim and move on to next round
+
+	// send out progressRound rpc msg to all followers
+
+	progressRound := rpc.ProgressRound{
+		Epoch:  re.epoch,
+		Leader: re.leader,
+		Round:  uint64(re.curRound),
+	}
+
+	// signing observeMsg
+	msgBytes, err := progressRound.Bytes(re.serverOpts.Codec)
+	if err != nil {
+		re.logger.Errorf("RE: err converting to bytes")
+		return
+	}
+
+	signature, err := re.SignMessage(msgBytes)
+	if err != nil {
+		re.logger.Errorf("RE: err signing msg bytes")
+		return
+	}
+
+	// constructing msg
+	rpcMsg, err := rpc.NewRPCMessageBuilder(
+		utils.NetAddr(re.serverOpts.Addr),
+		re.serverOpts.Codec,
+		re.serverOpts.ID,
+	).SetHeaders(
+		rpc.MessageProgressRound,
+	).SetTopic(
+		rpc.Reporter,
+	).SetPayload(progressRound).SetSignature(signature).Bytes()
+
+	if err != nil {
+		panic(err)
+	}
+
+	re.msgService.BroadcastMsg(rpcMsg)
+
+	// update its own local state to next round
+	go re.progressToNextRound()
 }
 
 func (re *ReportingEngine) assembleFinalReport() (*rpc.FinalReport, bool) {

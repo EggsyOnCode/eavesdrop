@@ -5,6 +5,7 @@ import (
 	"eavesdrop/logger"
 	"eavesdrop/ocr/jobs"
 	"eavesdrop/rpc"
+	"fmt"
 	"time"
 
 	fifo "github.com/foize/go.fifo"
@@ -167,11 +168,16 @@ func (p *Pacemaker) ProcessMessage(msg *rpc.DecodedMsg) error {
 		p.logger.Infof("PACEMAKER : faulty node count is : %v\n", p.ocrCtx.FaultyCount)
 
 		p.processNewEpochMsg(msg)
+
+		return nil
+	case rpc.ChangeLeaderMessage:
+		// TODO: change leader and launch new epoch
+
+		return nil
 	default:
 		p.logger.Errorf("PACEMAKER RPC Handler: unkown rpc msg type")
+		return fmt.Errorf("PACEMAKER RPC Handler: unkown rpc msg type")
 	}
-
-	return nil
 }
 
 func (p *Pacemaker) processNewEpochMsg(msg *rpc.DecodedMsg) {
@@ -232,12 +238,31 @@ func (p *Pacemaker) switchToNewEpoch() {
 	p.currEpochStat.n_e0 = 0
 	p.currEpochStat.new_e = 0
 
+	var repoter ReportingEngine
+	var Isleader bool
 	// recEvents are the events that have been recorded by the reporting engine during current epoch
-	p.Reporter.Stop()
 
 	// if leader , send in the recEvents
 	// if follower, send in empty queue
 	leader := findLeader(int(p.currEpochStat.e), secretKey, p.server.peers)
+	if leader.ID == p.ocrCtx.ID {
+		Isleader = true
+	} else {
+		Isleader = false
+	}
+
+	if p.Reporter != nil {
+		p.Reporter.Stop()
+	} else {
+		// if not started yet
+		pGlobals := PacemakerGlobals{
+			n: uint(p.currEpochStat.n),
+			f: uint(p.currEpochStat.f),
+		}
+		repoter = *NewReportingEngine(Isleader, p.currEpochStat.e, leader.ID, p.Reporter.serverOpts, pGlobals, *p.signer)
+		p.Reporter = &repoter
+	}
+
 	if leader.ID == p.ocrCtx.ID {
 		p.Reporter.Start(&p.recEvents, &p.jobRegistry)
 	} else {
@@ -247,12 +272,12 @@ func (p *Pacemaker) switchToNewEpoch() {
 	p.logger.Infof("PACEMAKER: switched to new epoch %v\n", p.currEpochStat.e)
 }
 
+// read the jobs from toml specs, launch thier event listeners,
+// use a channel to receved the receivedEvents (if any) and store them in some state
+// schedule tehm to be sent for observations (schedule is FIFO queue)
+// if no receveid Events, change leader msg emit if leader
+// only those jobs that have been received are scheduled during next epoch
 func (p *Pacemaker) launchJobListeners() {
-	// TODO: read the jobs from toml specs, launch thier event listeners,
-	// use a channel to receved the receivedEvents (if any) and store them in some state
-	// schedule tehm to be sent for observations (schedule is FIFO queue)
-	// if no receveid Events, change leader msg emit if leader
-
 	// read jobs
 	readers, err := jobs.ReadJobsFromDir(jobsDir)
 	if err != nil {

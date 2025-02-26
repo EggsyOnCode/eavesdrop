@@ -66,7 +66,6 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 	// 2. switch over the MsgHeaders
 	switch msg.Headers {
 	case rpc.MessageNewEpoch:
-
 		// the msg received is of type NewEpoch
 		newMsg := &rpc.NewEpochMesage{}
 

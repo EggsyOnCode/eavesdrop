@@ -49,20 +49,12 @@ type CacheLayer struct {
 	c_finalReport         rpc.FinalReport    // final report broadcasted by the leader to all followers before FINAL msg
 }
 
-type GeneralState struct {
-	sentEcho       Report // the echoed attested report (TODO: shoudl be a diff DS)
-	sentReport     bool   // indicates if REPORT message has been sent for this round/ attested report which has been sent for this round
-	completedRound bool   // indicates if current round is finished
-	receivedEcho   []bool // jth element true iff received FINAL - ECHO message with valid attested report from pj
-}
-
 type ReportingEngine struct {
-	curRound int    // current round (shared state between leader and non-leading oracles)
-	isLeader bool   // indicates if the oracle is the leader or follower
-	epoch    uint64 // current epoch number
-	leader   string // current leader's PeerID
-	GeneralState
-	LeaderState      // set either of the states, depending upon if hte oracle is leader or not
+	curRound         int    // current round (shared state between leader and non-leading oracles)
+	isLeader         bool   // indicates if the oracle is the leader or follower
+	epoch            uint64 // current epoch number
+	leader           string // current leader's PeerID
+	LeaderState             // set either of the states, depending upon if hte oracle is leader or not
 	msgService       MessagingLayer
 	serverOpts       ServerInfo
 	quitCh           chan struct{}
@@ -83,12 +75,6 @@ func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info Serve
 		jobSchedule: map[int][]jobs.Job{},
 		signer:      signer,
 		jobRegistry: &map[string]jobs.Job{},
-		GeneralState: GeneralState{
-			sentEcho:       Report{},
-			sentReport:     false,
-			completedRound: false,
-			receivedEcho:   make([]bool, 1),
-		},
 		LeaderState: LeaderState{
 			observations: ObservationSafeMap{},
 			reports:      make([]Report, 1),
@@ -215,21 +201,29 @@ func (re *ReportingEngine) AttachMsgLayer(msgService MessagingLayer) {
 
 // all messages with say topic Reporter will be routed to repoter.ProcessMessage, now this msgs could be of any type , like leader senidng msg, braodcsating something, an oracle submitting an observation (all of these msgs should be defiend in rpc_leader.go inside rpc pkg i think), so reporter.ProcessMessage could either handle all of them itself and update the state of the RE glovally or it could delegrate, for now, lets shouild build a monolithic RPC handler for reptoer inside ProcessMessgae
 func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
-	// TODO: if the msg recived has a phase number different from the current phase, then ignore the msg
-	// TODO: also if the msg's curr round or epoch is diff, handle that accordingly
+	// prechecks
+	if res, err := re.rpcMsgPrechecks(msg); err != nil || !res {
+		return fmt.Errorf("RE: rpc msg prechecks failed")
+	}
+
 	switch msg.Data.(type) {
 	case rpc.ObserveReq:
 		//shall only be recevied by followers
-
 		msg := msg.Data.(rpc.ObserveReq)
 		re.logger.Infof("RE: received OBSERVE-REQ msg: %v", msg)
 
 		re.curRound = int(msg.Round)
+
+		// ideally what shoudl be happening is this:
+		// leader sends progressRound msg to all followers and increase its curRound count locally and chagnes phase to observe
+		// during observe phase, it would send out observeReq msg to all followers
+		// containing curRound that is > MAX_ROUNDS, it would stop the RE for the current epoch
 		if re.curRound > MAX_ROUNDS {
 			re.logger.Infof("RE: max rounds reached, stopping RE")
-			// broadcast changeleader event
 
-			changeLeaderMsg := rpc.ChangeLeaderMessage{}
+			// broadcast changeleader event (change leader and newepoch msg have the
+			// same effect) i.e pacemaker will start a new epoch with new leader
+			newEpoch := rpc.NewEpochMesage{}
 
 			// constructing msg
 			rpcMsg, err := rpc.NewRPCMessageBuilder(
@@ -237,10 +231,10 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 				re.serverOpts.Codec,
 				re.serverOpts.ID,
 			).SetHeaders(
-				rpc.MessageChangeLeader,
+				rpc.MessageNewEpoch,
 			).SetTopic(
 				rpc.Pacemaker,
-			).SetPayload(changeLeaderMsg).Bytes()
+			).SetPayload(newEpoch).Bytes()
 
 			if err != nil {
 				panic(err)
@@ -648,6 +642,8 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 			if re.finalReportAttestation >= uint(re.pacemakerGlobals.f)+1 {
 				// change phase to Transmittion
+				re.Phase = PhaseTransmit
+				re.LeaderState.phaseCh <- PhaseTransmit
 			}
 		} else {
 			re.logger.Errorf("RE: final echo msg not signed or not a valid peer")
@@ -656,6 +652,28 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 		return nil
 
+	case rpc.ProgressRound:
+		// received by the follower only only
+
+		progressMsg := msg.Data.(rpc.ProgressRound)
+
+		msgBytes, err := progressMsg.Bytes(re.serverOpts.Codec)
+		if err != nil {
+			re.logger.Errorf("RE: err converting to bytes")
+			return err
+		}
+
+		// verify the msg signature if of the leader
+		isSigned, err := VerifySignature(msgBytes, re.leader, msg.Signature)
+		if err != nil || !isSigned {
+			re.logger.Errorf("RE: err verifying leader's signature")
+			return fmt.Errorf("RE: err verifying leader's signature")
+		}
+
+		// if signed, update the state and move to the next round
+		go re.progressToNextRound()
+
+		return nil
 	default:
 		re.logger.Errorf("RE: unknown message type: %v", reflect.TypeOf(msg.Data))
 		return nil
@@ -664,6 +682,7 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 // to be called by the pacemaker, should return the imp state of current
 // epoch needed to bootstrap the new epoch
+// TODO : implement this
 func (r *ReportingEngine) Stop() {
 	// stop the reporting engine
 	close(r.quitCh)
@@ -671,11 +690,49 @@ func (r *ReportingEngine) Stop() {
 	r.cleanupFunc()
 }
 
-// TODO: implement this
 func (re *ReportingEngine) cleanupFunc() {
-	// cleanup function
-	// will be called when the reporting engine is stopped
-	// will have to cleanup the state and any other resources
+	// Ensure cleanup happens only once
+	re.logger.Info("Cleaning up ReportingEngine resources...")
+
+	// Close quit channel to signal shutdown
+	select {
+	case <-re.quitCh:
+		// Already closed
+	default:
+		close(re.quitCh)
+	}
+
+	// Close phase channel if leader
+	if re.isLeader {
+		close(re.phaseCh)
+	}
+
+	// Stop timers if they exist
+	if re.TimerRoundTimeout != nil {
+		re.TimerRoundTimeout.Stop()
+	}
+	if re.TimerGrace != nil {
+		re.TimerGrace.Stop()
+	}
+
+	// Clear job schedule and registry
+	re.jobSchedule = nil
+	re.jobRegistry = nil
+
+	// Reset cache layer
+	re.cacheLayer.observe_n = 0
+	re.cacheLayer.report_n = 0
+
+	// Clear received events queue
+	if re.recEvents != nil {
+		re.recEvents = nil
+	}
+
+	// Nullify messaging service reference
+	re.msgService = nil
+
+	// Final log before complete shutdown
+	re.logger.Info("ReportingEngine cleanup complete.")
 }
 
 func (re *ReportingEngine) SignMessage(msg []byte) (c.Signature, error) {
@@ -759,4 +816,50 @@ func (re *ReportingEngine) VerifySigAndPeer(msg []byte, fromID string, sign c.Si
 
 	return ifSigned && isPeer
 
+}
+
+func (re *ReportingEngine) progressToNextRound() {
+	// 1. reset cache layer
+	// 2. reset leader state pertaining to currRound
+	// 3. update currRound
+	// 4. update phase to Observe
+
+	// if node is the leader, reset the leader state
+	if re.serverOpts.ID == re.leader {
+		re.LeaderState = LeaderState{
+			observations:           ObservationSafeMap{},
+			finalReport:            &rpc.FinalReport{},
+			reports:                make([]Report, 1),
+			Phase:                  PhaseObserve,
+			finalReportAttestation: 0,
+			phaseCh:                make(chan LeaderPhase),
+		}
+	} else {
+		re.cacheLayer = CacheLayer{
+			observe_n:             0,
+			report_n:              0,
+			jobs:                  []jobs.Job{},
+			jobReports:            rpc.JobReports{},
+			follower_observations: ObservationSafeMap{},
+			c_finalReport:         rpc.FinalReport{},
+		}
+	}
+
+	re.curRound++
+}
+
+func (re *ReportingEngine) rpcMsgPrechecks(msg *rpc.DecodedMsg) (bool, error) {
+	// if the msg recived has a phase number different from the current phase, then ignore the msg
+	// also if the msg's curr round or epoch is diff, handle that accordingly
+
+	arbMsg := msg.Data
+	if epoch, round, leader, phase, err := getCommonFieldsAndPhase(arbMsg); err != nil {
+		return false, err
+	} else {
+		if (epoch != re.epoch) || (round != uint64(re.curRound)) || (leader != re.leader) || re.Phase != phase {
+			return false, fmt.Errorf("RE: msg for wrong epoch or round or phase or leader")
+		}
+	}
+
+	return true, nil
 }

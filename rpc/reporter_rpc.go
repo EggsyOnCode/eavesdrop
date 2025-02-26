@@ -46,7 +46,7 @@ type JobReports map[string]interface{}
 
 type Signatories struct {
 	Sign crypto.Signature
-	ID    string // public key
+	ID   string // public key
 }
 type FinalReport struct {
 	Report      JobReports
@@ -95,4 +95,14 @@ type FinalEcho struct {
 
 func (fe *FinalEcho) Bytes(c Codec) ([]byte, error) {
 	return c.Encode(fe)
+}
+
+type ProgressRound struct {
+	Epoch  uint64 `json:"epoch"`
+	Round  uint64 `json:"round"`
+	Leader string `json:"leader"`
+}
+
+func (pr *ProgressRound) Bytes(c Codec) ([]byte, error) {
+	return c.Encode(pr)
 }
