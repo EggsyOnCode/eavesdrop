@@ -120,7 +120,6 @@ func (re *ReportingEngine) Start(recEvents *fifo.Queue, jobReg *map[string]jobs.
 	re.jobRegistry = jobReg
 
 	if re.isLeader {
-
 		// schedule the jobs to be observed during each round of the epoch
 		re.recEvents = recEvents // received from pacemaker
 		n := recEvents.Len()
@@ -172,7 +171,6 @@ free:
 func (re *ReportingEngine) orchestrateFollowing() {
 	// non-leader orchestration
 	// will listen to rpc msgs from the leader and handle them accordingly
-
 free:
 	for {
 		select {
@@ -682,7 +680,6 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 // to be called by the pacemaker, should return the imp state of current
 // epoch needed to bootstrap the new epoch
-// TODO : implement this
 func (r *ReportingEngine) Stop() {
 	// stop the reporting engine
 	close(r.quitCh)

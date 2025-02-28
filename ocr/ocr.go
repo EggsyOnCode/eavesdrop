@@ -5,6 +5,7 @@ import (
 	"eavesdrop/rpc"
 	"fmt"
 	"math"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -77,6 +78,7 @@ func (o *OCR) Start() error {
 
 	// register rpc processor in server for handling incoming rpc msg
 	o.Server.RPCProcessor.RegisterHandler(rpc.Pacemaker, o.Pacemaker)
+	o.Server.RPCProcessor.RegisterHandler(rpc.Pacemaker, o.Pacemaker.Reporter)
 
 	//TODO: how to register handlers for reporter in Server o.Server.RPCProcessor.RegisterHandler(rpc.Reporter, o.Reporter)
 
@@ -84,6 +86,8 @@ func (o *OCR) Start() error {
 
 	// pass the context to the pacemaker and reporter
 	o.Pacemaker.SetOCRContext(o.ctx)
+
+	time.Sleep(5 * time.Second) // wait for the server to find peers
 
 	go o.Pacemaker.Start()
 
@@ -99,16 +103,21 @@ free:
 	for {
 		select {
 		case msg := <-o.pacemakerCh:
+
+			// t := reflect.TypeOf(msg.Data)
+			// o.logger.Infof("msg type: %v", t)
+
 			// handle pacemaker messages
 			switch msg.Data.(type) {
-			case *rpc.OCRState:
-				if state, ok := msg.Data.(*rpc.OCRState); ok {
-					o.state = *state
+			case rpc.OCRState:
+				if state, ok := msg.Data.(rpc.OCRState); ok {
+					o.state = state
 				} else {
 					// Handle type assertion failure
 					o.logger.Errorf("OCR: type assertion failed")
 				}
 			default:
+				o.logger.Errorf("msg type: %v ", msg.Data)
 				o.logger.Errorf("OCR: unknown message type")
 			}
 

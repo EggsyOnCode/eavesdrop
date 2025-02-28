@@ -1,0 +1,28 @@
+type = "directrequest"
+schemaVersion = 1
+chainID = "ethereum"
+evmChainID = 1
+externalJobId = "39d6e512-4b24-4877-8d08-68d4a2d39e19"
+name = "eth mode request"
+contractAddress = "0x9876543210abcdef9876543210abcdef98765432"
+
+[reporting]
+strategy = "mode"
+
+[[observationSource]]
+name = "fetch_data"
+type = "http"
+method = "GET"
+url = "https://min-api.cryptocompare.com/data/price?fsym=ETH&tsyms=BTC,USD,JPY"
+
+[[observationSource]]
+name = "parse_json"
+type = "json"
+input = "fetch_data"
+path = "BTC"
+
+[[observationSource]]
+name = "multiply"
+type = "math"
+input = "parse_json"
+factor = 0.95

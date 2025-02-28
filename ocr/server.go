@@ -50,7 +50,7 @@ func NewServer(opts *ServerOpts) *Server {
 
 	peerCh := make(chan *network.Peer, 1024)
 	msgCh := make(chan *rpc.RPCMessage, 1024)
-	transporter := network.NewLibp2pTransport(peerCh, msgCh, nil, opts.PrivateKey)
+	transporter := network.NewLibp2pTransport(peerCh, msgCh, nil, *opts.PrivateKey)
 	rpcProcessor := &ServerRPCProcessor{
 		handlers: make(map[rpc.MesageTopic]rpc.RPCProcessor),
 		logger:   logger.Get().Sugar(),
@@ -64,7 +64,7 @@ func NewServer(opts *ServerOpts) *Server {
 		ServerOpts:    opts,
 		quitCh:        make(chan struct{}),
 		peers:         avl.New[string, *ProtcolPeer](g.Greater[string]),
-		peerCountChan: make(chan int),
+		peerCountChan: make(chan int, 1000),
 	}
 
 	s.logger = logger.Get().Sugar().With("server_id", s.id)
@@ -104,7 +104,7 @@ free:
 			s.peerLock.Lock()
 			pPeer := &ProtcolPeer{peer}
 			s.peers.Put(peer.ID, pPeer)
-			// s.peerCountChan <- s.peers.Size() (TODO: some issue here)
+			s.peerCountChan <- s.peers.Size()
 
 			// send StatusMsg to peer
 			s.sendHandshakeMsgToPeerNode(peer.ID)

@@ -1,0 +1,28 @@
+type = "directrequest"
+schemaVersion = 1
+chainID = "ethereum"
+evmChainID = 1
+externalJobId = "7f3d9e9a-4c4a-469b-84a7-ffb32fced7b1"
+name = "eth custom request"
+contractAddress = "0xa1b2c3d4e5f67890123456789abcdefabcdefabcd"
+
+[reporting]
+strategy = "custom"
+
+[[observationSource]]
+name = "fetch_data"
+type = "http"
+method = "GET"
+url = "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd"
+
+[[observationSource]]
+name = "parse_json"
+type = "json"
+input = "fetch_data"
+path = "USD"
+
+[[observationSource]]
+name = "multiply"
+type = "math"
+input = "parse_json"
+factor = 1.05

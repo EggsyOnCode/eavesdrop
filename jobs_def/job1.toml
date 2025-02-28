@@ -1,0 +1,28 @@
+type = "directrequest"
+schemaVersion = 1
+chainID = "ethereum"
+evmChainID = 1
+externalJobId = "bca23d77-591b-4f2e-9f6a-88b7e7cb9a47"
+name = "eth median request"
+contractAddress = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcdef"
+
+[reporting]
+strategy = "median"
+
+[[observationSource]]
+name = "fetch_data"
+type = "http"
+method = "GET"
+url = "https://min-api.cryptocompare.com/data/price?fsym=ETH&tsyms=BTC,USD,EUR,GBP"
+
+[[observationSource]]
+name = "parse_json"
+type = "json"
+input = "fetch_data"
+path = "USD"
+
+[[observationSource]]
+name = "multiply"
+type = "math"
+input = "parse_json"
+factor = 1.2

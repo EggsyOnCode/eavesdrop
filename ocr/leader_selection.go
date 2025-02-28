@@ -50,6 +50,7 @@ func findLeader(epoch int, secretKey []byte, peers *avl.Tree[string, *ProtcolPee
 	// we will eventually find something , so no thread of
 	// infinite loop here
 	peers.Each(func(key string, peer *ProtcolPeer) {
+		logger.Info("PACEMAKER in peer Map: peer ", peer.ID)
 		if i == leaderIndex {
 			leader = peer
 			return // Stop iteration early

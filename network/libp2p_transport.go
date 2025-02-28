@@ -2,7 +2,6 @@ package network
 
 import (
 	"context"
-	"crypto"
 	"crypto/sha256"
 	"eavesdrop/logger"
 	"eavesdrop/rpc"
@@ -12,6 +11,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	cr "eavesdrop/crypto"
 
 	"github.com/libp2p/go-libp2p"
 	c "github.com/libp2p/go-libp2p/core/crypto"
@@ -46,8 +47,9 @@ type LibP2pTransport struct {
 
 // peerCh passed down as dependency from the server, to be used to inform the callers of newly connected
 // disconnected peers. Socket info (+ port selection is by protocol itslef) is hidden from teh caller
-func NewLibp2pTransport(peerCh chan *Peer, msgCh chan *rpc.RPCMessage, codec rpc.Codec, pk crypto.PrivateKey) *LibP2pTransport {
+func NewLibp2pTransport(peerCh chan *Peer, msgCh chan *rpc.RPCMessage, codec rpc.Codec, pk cr.PrivateKey) *LibP2pTransport {
 	priv, _, _ := c.KeyPairFromStdKey(pk)
+	// libp2pPk := cr.ConvertToLibp2pPrivateKey(&pk)
 	return &LibP2pTransport{
 		msgCh:  msgCh,
 		peerCh: peerCh,

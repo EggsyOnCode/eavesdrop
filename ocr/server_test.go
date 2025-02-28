@@ -30,7 +30,7 @@ func TestRpcBetweenTwoNodes(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
-	select{}
+	// select{}
 
 	// Construct a NewEpochMsg
 	newEpochMsg := &rpc.NewEpochMesage{

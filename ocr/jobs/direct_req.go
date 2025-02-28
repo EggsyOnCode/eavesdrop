@@ -204,6 +204,34 @@ func (dr *DirectRequest) Execute(task DirectReqTask) error {
 	return nil
 }
 
-func (dr *DirectRequest) Listen(chan JobEventResponse) {
+func (dr *DirectRequest) Listen(chJre chan JobEventResponse) {
 	// no-op
+
+	res, _ := dr.Result()
+	dre := &DirectReqEventRes{
+		id:     dr.JobID,
+		event:  "dummy_event",
+		result: res,
+	}
+
+	chJre <- dre
+
+}
+
+type DirectReqEventRes struct {
+	id     string
+	event  string
+	result interface{}
+}
+
+func (dre *DirectReqEventRes) JobID() string {
+	return dre.id
+}
+
+func (dre *DirectReqEventRes) Event() string {
+	return dre.event
+}
+
+func (dre *DirectReqEventRes) Result() interface{} {
+	return dre.result
 }

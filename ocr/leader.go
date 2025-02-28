@@ -262,10 +262,13 @@ func (re *ReportingEngine) handleTransmit() {
 		// Create a new transmitter
 		transmitter := NewTransmitter(re.epoch, uint64(re.curRound), re.leader, job)
 
+		// fetch the final job report value to be transmitted
+		jobReportValue := re.finalReport.Report[job.ID()]
+
 		// Launch each transmitter in a goroutine
 		go func(t *Transmitter) {
 			defer wg.Done()
-			t.Transmit(statusChan)
+			t.Transmit(statusChan, jobReportValue)
 		}(transmitter)
 	}
 

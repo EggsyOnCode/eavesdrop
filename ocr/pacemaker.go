@@ -6,6 +6,7 @@ import (
 	"eavesdrop/ocr/jobs"
 	"eavesdrop/rpc"
 	"fmt"
+	"io"
 	"time"
 
 	fifo "github.com/foize/go.fifo"
@@ -77,6 +78,7 @@ func NewPaceMaker(s *Server, ocrCh chan *rpc.PacemakerMessage, signer *crypto.Pr
 		recEventsChan: make(chan jobs.JobEventResponse),
 		recEvents:     *fifo.NewQueue(),
 		jobRegistry:   map[string]jobs.Job{},
+		Reporter:      &ReportingEngine{},
 	}
 }
 
@@ -111,7 +113,6 @@ func (p *Pacemaker) Start() {
 	go func() {
 		for {
 			select {
-
 			case event := <-p.recEventsChan:
 				// handle the events
 				// add to recEvents array for future processing
@@ -147,15 +148,56 @@ func (p *Pacemaker) Start() {
 
 	// select a leader
 	leader := findLeader(int(p.currEpochStat.e), secretKey, p.server.peers)
-	// update teh ocr staet accordingly
+
+	p.logger.Infof("PACEMAKER: Leader is %s , server ID : %v", leader.ID, p.ocrCtx.ID)
+
+	var isLeader bool
 	if leader.ID == p.ocrCtx.ID {
+		isLeader = true
+	} else {
+		isLeader = false
+	}
+	// update teh ocr staet accordingly
+	if isLeader {
 		p.upateOCRState(rpc.LEADING)
+
+		cfg := jobs.JobSourceConfig{
+			SourceType: jobs.JobSourceDir,
+			DirPath:    jobsDir,
+		}
+		// launch event listeners -- only if ur a leader
+		go p.launchJobListeners(cfg)
+
+		// give job listenre some time to read the events on-chain
+		// Adaptive waiting for events (instead of fixed 5s sleep)
+		timeout := 10 * time.Second
+		if !p.waitForEvents(timeout) {
+			p.logger.Warn("PACEMAKER: No events received within timeout. Triggering leader change...")
+			// new epoch msg to swithc to new leader
+			p.SendNewEpochMsg()
+		}
+
 	} else {
 		p.upateOCRState(rpc.FOLLOWING)
 	}
 
-	// launch event listeners
-	go p.launchJobListeners()
+	// p_globals
+	p_globals := PacemakerGlobals{
+		n: uint(p.currEpochStat.n),
+		f: uint(p.currEpochStat.f),
+	}
+
+	s_info := ServerInfo{
+		Addr:  p.server.ID().Address().String(),
+		Codec: p.server.Codec,
+		ID:    p.server.id.String(),
+	}
+
+	// init the Reporter
+	p.Reporter = NewReportingEngine(isLeader, p.currEpochStat.e, leader.ID, s_info, p_globals, *p.signer)
+	// if the node is a follower, p.recEvents should be len(0) and will be ignored
+	go p.Reporter.Start(&p.recEvents, &p.jobRegistry)
+
 }
 
 func (p *Pacemaker) ProcessMessage(msg *rpc.DecodedMsg) error {
@@ -172,6 +214,7 @@ func (p *Pacemaker) ProcessMessage(msg *rpc.DecodedMsg) error {
 		return nil
 	case rpc.ChangeLeaderMessage:
 		// TODO: change leader and launch new epoch
+		// idt its needed since new epoch msg achives the same thing
 
 		return nil
 	default:
@@ -277,15 +320,26 @@ func (p *Pacemaker) switchToNewEpoch() {
 // schedule tehm to be sent for observations (schedule is FIFO queue)
 // if no receveid Events, change leader msg emit if leader
 // only those jobs that have been received are scheduled during next epoch
-func (p *Pacemaker) launchJobListeners() {
-	// read jobs
-	readers, err := jobs.ReadJobsFromDir(jobsDir)
-	if err != nil {
-		p.logger.Errorf("RE: err reading jobs from dir: %v", err)
+func (p *Pacemaker) launchJobListeners(config jobs.JobSourceConfig) {
+	var readers []io.Reader
+	var err error
+
+	// Select appropriate job reader based on config
+	switch config.SourceType {
+	case jobs.JobSourceDir:
+		readers, err = jobs.ReadJobsFromDir(config.DirPath)
+
+	default:
+		p.logger.Errorf("RE: Unknown job source type: %v", config.SourceType)
 		return
 	}
 
-	// create JobStructures
+	if err != nil {
+		p.logger.Errorf("RE: Error fetching jobs from %v: %v", config.SourceType, err)
+		return
+	}
+
+	// Process the job readers
 	jobReaderFac := jobs.NewJobReaderFactory()
 	jobReaderconfig := jobs.JobReaderConfig{
 		JobFormat: jobs.JobFormatTOML,
@@ -294,15 +348,26 @@ func (p *Pacemaker) launchJobListeners() {
 	for _, reader := range readers {
 		job, err := jobReaderFac.Read(reader, jobReaderconfig)
 		if err != nil {
-			p.logger.Errorf("RE: err creating job from reader: %v", err)
+			p.logger.Errorf("RE: Error creating job from reader: %v", err)
 			continue
 		}
 
-		// add job to registry
+		// Add job to registry
 		p.jobRegistry[job.ID()] = job
 
-		// launch event listeners
+		// Launch event listeners
 		go job.Listen(p.recEventsChan)
 	}
+}
 
+func (p *Pacemaker) waitForEvents(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		if p.recEvents.Len() > 0 {
+			return true // Events detected within timeout
+		}
+		time.Sleep(500 * time.Millisecond) // Poll every 500ms
+	}
+	return false // No events within timeout
 }
