@@ -6,7 +6,6 @@ import (
 	"log"
 	"reflect"
 
-	"github.com/zyedidia/generic/avl"
 	"go.uber.org/zap"
 )
 
@@ -14,9 +13,9 @@ type ServerRPCProcessor struct {
 	// map of rpc message topics to rpc processors
 	// a router
 	// "0x1" -> Observer's RPCProcessor
-	handlers map[rpc.MesageTopic]rpc.RPCProcessor
-	peerMap  *avl.Tree[string, *ProtcolPeer]
-	logger   *zap.SugaredLogger
+	handlers          map[rpc.MesageTopic]rpc.RPCProcessor
+	logger            *zap.SugaredLogger
+	commsChWithServer chan *rpc.InternalPeerServerInfoMsg
 }
 
 func (s *ServerRPCProcessor) RegisterHandler(topic rpc.MesageTopic, handler rpc.RPCProcessor) {
@@ -35,6 +34,13 @@ func (s *ServerRPCProcessor) ProcessMessage(msg *rpc.DecodedMsg) error {
 		case *rpc.StatusMsg:
 			statusMsg := msg.Data.(*rpc.StatusMsg)
 			s.logger.Info("received status msg ", statusMsg)
+			infoMsg := rpc.InternalPeerServerInfoMsg{
+				NetworkId:  statusMsg.NetworkId,
+				ListenAddr: statusMsg.ListenAddr,
+				ServerId:   statusMsg.Id,
+			}
+
+			s.commsChWithServer <- &infoMsg
 
 		default:
 			log.Printf("unknown message type: %v", reflect.TypeOf(msg.Data))
@@ -79,7 +85,6 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 		}, nil
 
 	case rpc.MessageStatus:
-
 		newMsg := &rpc.StatusMsg{}
 		if err := codec.Decode(msg.Data, newMsg); err != nil {
 			return nil, err

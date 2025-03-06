@@ -10,6 +10,7 @@ import (
 	"time"
 
 	fifo "github.com/foize/go.fifo"
+	"github.com/zyedidia/generic/avl"
 	"go.uber.org/zap"
 )
 
@@ -20,8 +21,10 @@ const (
 	LEADER    SendingSchme = 1
 	PEER      SendingSchme = 2
 
-	ResendTimes  time.Duration = time.Second * 3
-	ProgressTime time.Duration = time.Second * 20
+	ResendTimes    time.Duration = time.Second * 3
+	ProgressTime   time.Duration = time.Second * 20
+	initTickerTime time.Duration = 500 * time.Millisecond // Start with 500ms
+	maxBackoff     time.Duration = 10 * time.Second       // Max 10s backoff
 )
 
 var (
@@ -147,9 +150,9 @@ func (p *Pacemaker) Start() {
 	}()
 
 	// select a leader
-	leader := findLeader(int(p.currEpochStat.e), secretKey, p.server.peers)
+	leader := exponentialBackoff(initTickerTime, maxBackoff, int(p.currEpochStat.e), secretKey, p.server.peers)
 
-	p.logger.Infof("PACEMAKER: Leader is %s , server ID : %v", leader.ID, p.ocrCtx.ID)
+	p.logger.Infof("PACEMAKER: Leader is %s , server ID : %v", leader.ServerID, p.ocrCtx.ID)
 
 	var isLeader bool
 	if leader.ID == p.ocrCtx.ID {
@@ -370,4 +373,32 @@ func (p *Pacemaker) waitForEvents(timeout time.Duration) bool {
 		time.Sleep(500 * time.Millisecond) // Poll every 500ms
 	}
 	return false // No events within timeout
+}
+
+func exponentialBackoff(
+	initTickerTime time.Duration,
+	maxBackoff time.Duration,
+	epoch int,
+	secretKey []byte,
+	peers *avl.Tree[string, *ProtcolPeer],
+) *ProtcolPeer {
+	backoff := initTickerTime
+	for {
+		leader := findLeader(epoch, secretKey, peers)
+		if leader != nil {
+			return leader
+		}
+
+		logger := logger.Get().Sugar()
+		logger.Warnf("Leader selection failed, retrying in %v...", backoff)
+
+		// Wait for the backoff duration
+		time.Sleep(backoff)
+
+		// Increase backoff time exponentially, but cap it at maxBackoff
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
 }

@@ -10,13 +10,14 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-
-	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/crypto/secp256k1"
 )
 
 type PrivateKey struct {
 	key *ecdsa.PrivateKey
+}
+
+func (pk *PrivateKey) Key() *ecdsa.PrivateKey {
+	return pk.key
 }
 
 // ConvertBase64ToECDSAPrivateKey converts a base64 string to *ecdsa.PrivateKey using secp256k1.
@@ -36,7 +37,7 @@ func ConvertBase64ToECDSAPrivateKey(base64Key string) (*PrivateKey, error) {
 	d := new(big.Int).SetBytes(keyBytes)
 
 	// Use secp256k1 curve
-	curve := secp256k1.S256()
+	curve := elliptic.P256()
 
 	// Construct the private key
 	privateKey := &ecdsa.PrivateKey{
@@ -55,16 +56,8 @@ func ConvertBase64ToECDSAPrivateKey(base64Key string) (*PrivateKey, error) {
 	return &PrivateKey{key: privateKey}, nil
 }
 
-func HexToPrivKey(hexKey string) (*PrivateKey, error) {
-	pk, err := crypto.HexToECDSA(hexKey)
-	if err != nil {
-		return nil, err
-	}
-	return &PrivateKey{key: pk}, nil
-}
-
 func NewPrivateKeyUsingReader(r io.Reader) *PrivateKey {
-	key, err := ecdsa.GenerateKey(secp256k1.S256(), r)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), r)
 	if err != nil {
 		panic(err)
 	}
@@ -78,11 +71,27 @@ func GeneratePrivateKey() *PrivateKey {
 	return NewPrivateKeyUsingReader(rand.Reader)
 }
 
-type PublicKey []byte
+type PublicKey struct {
+	key *ecdsa.PublicKey
+}
 
 func (p *PrivateKey) PublicKey() PublicKey {
-	pk := crypto.CompressPubkey(&p.key.PublicKey)
-	return pk
+	return PublicKey{key: &p.key.PublicKey}
+}
+
+func (p PublicKey) Bytes() []byte {
+	// Convert to compressed format
+	x := p.key.X.Bytes()
+	prefix := byte(0x02)
+	if p.key.Y.Bit(0) == 1 { // Check if Y is odd - more efficient
+		prefix = byte(0x03)
+	}
+
+	pubKey := make([]byte, 1+len(x))
+	pubKey[0] = prefix
+	copy(pubKey[1:], x)
+
+	return pubKey
 }
 
 // msg are signed with PrivateKey
@@ -98,18 +107,25 @@ func (p *PrivateKey) Sign(data []byte) (*Signature, error) {
 func StringToPublicKey(hexString string) (PublicKey, error) {
 	bytes, err := hex.DecodeString(hexString)
 	if err != nil {
-		return nil, fmt.Errorf("invalid hex string: %v", err)
+		return PublicKey{}, fmt.Errorf("invalid hex string: %v", err)
 	}
-	return PublicKey(bytes), nil
+
+	// Unmarshal the compressed public key
+	x, y := elliptic.UnmarshalCompressed(elliptic.P256(), bytes)
+	if x == nil || y == nil {
+		return PublicKey{}, fmt.Errorf("invalid compressed public key")
+	}
+
+	return PublicKey{key: &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}}, nil
 }
 
 // slice of bytes which would be sent over the network
 
 func (p PublicKey) String() string {
-	return hex.EncodeToString(p)
+	return hex.EncodeToString(p.Bytes())
 }
 func (p PublicKey) Address() Address {
-	hash := sha256.Sum256(p)
+	hash := sha256.Sum256(p.Bytes())
 
 	//the last 20 bytes are the address
 	return AddressFromBytes(hash[len(hash)-20:])
@@ -125,7 +141,7 @@ func (sig *Signature) String() string {
 
 // msg can be verified with the public key
 func (sig *Signature) Verify(data []byte, p PublicKey) bool {
-	x, y := elliptic.UnmarshalCompressed(elliptic.P256(), p)
+	x, y := elliptic.UnmarshalCompressed(elliptic.P256(), p.Bytes())
 	pk := &ecdsa.PublicKey{
 		Curve: elliptic.P256(),
 		X:     x,

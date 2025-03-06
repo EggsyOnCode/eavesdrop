@@ -54,6 +54,10 @@ func (o *OCR) Start() error {
 		return fmt.Errorf("OCR: missing required components")
 	}
 
+	// including server ID in oct ctx
+	o.ctx.ID = o.Server.ID().String()
+	fmt.Println("////// id of the server is ", o.ctx.ID)
+
 	go func() {
 		// can be updated in future, so the func should have a permanet listener
 
@@ -62,9 +66,6 @@ func (o *OCR) Start() error {
 		o.ctx.PeerCount = peerCount
 		faultyC := float32(((peerCount - 1) / 3))
 		o.ctx.FaultyCount = int(math.Ceil(float64(faultyC)))
-
-		// including server ID in oct ctx
-		o.ctx.ID = o.Server.ID().String()
 
 		close(o.peerCountInit) // Signal that the context is ready
 	}()

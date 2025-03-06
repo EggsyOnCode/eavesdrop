@@ -38,7 +38,8 @@ func findLeader(epoch int, secretKey []byte, peers *avl.Tree[string, *ProtcolPee
 	numOracles := peers.Size()
 	logger := logger.Get().Sugar()
 	if numOracles < 2 {
-		logger.Fatal("Not enough peers to select a leader")
+		logger.Errorf("Not enough peers to select a leader")
+		return nil
 	}
 
 	leaderIndex := selectLeader(epoch, secretKey, numOracles)

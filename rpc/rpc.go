@@ -1,8 +1,10 @@
 package rpc
 
 import (
+	"bytes"
 	c "eavesdrop/crypto"
 	"eavesdrop/utils"
+	"encoding/gob"
 )
 
 type RPCMessage struct {
@@ -40,3 +42,19 @@ type RPCProcessor interface {
 }
 
 type RPCDecodeFunc func(RPCMessage, Codec) (*DecodedMsg, error)
+
+type InternalPeerServerInfoMsg struct {
+	NetworkId  string
+	ListenAddr string
+	ServerId   string
+}
+
+func (m *InternalPeerServerInfoMsg) Bytes() ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := gob.NewEncoder(&buf)
+	if err := encoder.Encode(m); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}

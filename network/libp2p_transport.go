@@ -47,12 +47,11 @@ type LibP2pTransport struct {
 
 // peerCh passed down as dependency from the server, to be used to inform the callers of newly connected
 // disconnected peers. Socket info (+ port selection is by protocol itslef) is hidden from teh caller
-func NewLibp2pTransport(peerCh chan *Peer, msgCh chan *rpc.RPCMessage, codec rpc.Codec, pk cr.PrivateKey) *LibP2pTransport {
-	priv, _, _ := c.KeyPairFromStdKey(pk)
-	// libp2pPk := cr.ConvertToLibp2pPrivateKey(&pk)
+func NewLibp2pTransport(msgCh chan *rpc.RPCMessage, codec rpc.Codec, pk cr.PrivateKey) *LibP2pTransport {
+	priv, _, _ := c.KeyPairFromStdKey(pk.Key())
 	return &LibP2pTransport{
 		msgCh:  msgCh,
-		peerCh: peerCh,
+		peerCh: make(chan *Peer, 100),
 		logger: logger.Get().Sugar(),
 		codec:  codec,
 		pk:     priv,
@@ -67,21 +66,33 @@ func (lt *LibP2pTransport) Start() {
 		),
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 	)
+
 	if err != nil {
 		panic(err)
 	}
 	lt.host = host
 
 	// Modify logger to include the server's ID in every log entry
-	lt.logger = lt.logger.With("server_id", host.ID().String())
+	lt.logger = lt.logger.With("network_id", host.ID().String())
 
-	lt.logger.Info("Host with ID", host.ID().String(), " listen Addr", host.Addrs())
+	lt.logger.Info("Host with ID ", host.ID().String(), " listen Addr", host.Addrs())
 
 	// attach handlers for reading / writing when peer connects
 	host.SetStreamHandler(protocolID, lt.handleStream)
 
 	// start the p2p discovery service
 	lt.DiscoverPeers()
+
+	// go func() {
+	// 	for {
+	// 		p := <-lt.peerCh
+	// 		lt.logger.Infof("New peer discovered: %v", p)
+	// 	}
+	// }()
+}
+
+func (lt *LibP2pTransport) ID() string {
+	return lt.host.ID().String()
 }
 
 func (lt *LibP2pTransport) Stop() error {
@@ -101,6 +112,7 @@ func (lt *LibP2pTransport) ConsumeMsgs() <-chan *rpc.RPCMessage {
 }
 
 func (lt *LibP2pTransport) ConsumePeers() <-chan *Peer {
+	lt.logger.Debug("ConsumePeers called")
 	return lt.peerCh
 }
 
@@ -174,7 +186,6 @@ func (lt *LibP2pTransport) DiscoverPeers() {
 
 // this msg is exposed to the caller, for sending msg to a particular peer
 func (lt *LibP2pTransport) SendMsg(id string, data []byte) error {
-
 	pID, err := peer.Decode(id)
 	if err != nil {
 		lt.logger.Error("Invalid peer ID:", err)
@@ -226,7 +237,7 @@ type discoveryNotifee struct {
 
 // Called when a new peer is discovered
 func (d *discoveryNotifee) HandlePeerFound(p peer.AddrInfo) {
-	logger.Get().Sugar().Info("Discovered a new peer:", p.ID)
+	logger.Get().Sugar().Info("Discovered a new peer:", p.ID, " host id ", d.h.ID())
 	// DIRTY solution: adding a random delay of upto 2sec to avoid the TCP simulatenous connect error
 	time.Sleep(getPeerDelay(p.ID))
 
@@ -238,9 +249,7 @@ func (d *discoveryNotifee) HandlePeerFound(p peer.AddrInfo) {
 
 	// Add the peer to the channel (eventually to be consumed by the server)
 	peer := NewPeer(p.ID.String(), p.Addrs[0].String())
-	d.mu.Lock()
 	d.peerCh <- peer
-	d.mu.Unlock()
 }
 
 // Compute a deterministic delay based on peer ID

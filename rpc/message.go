@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"eavesdrop/crypto"
 	"fmt"
 )
 
@@ -54,7 +53,8 @@ type ProtocolMsg interface {
 }
 
 type StatusMsg struct {
-	Id         crypto.PublicKey
+	Id         string
+	NetworkId  string
 	ListenAddr string
 }
 

@@ -8,6 +8,7 @@ import (
 	"eavesdrop/utils"
 	"fmt"
 	"sync"
+	"time"
 
 	g "github.com/zyedidia/generic"
 	"github.com/zyedidia/generic/avl"
@@ -17,6 +18,7 @@ import (
 // the protocol level rep of network Peer; this DS can be extended to include other info later on
 // network.Peer.ID should be === Server.ID
 type ProtcolPeer struct {
+	ServerID string // server ID (From appToPeerId)
 	*network.Peer
 }
 
@@ -32,11 +34,11 @@ type Server struct {
 	*ServerOpts
 	Transporter   network.Transport
 	RPCProcessor  *ServerRPCProcessor
-	peerLock      *sync.RWMutex      // protects peerCh
-	peerCh        chan *network.Peer // peerCh used by Transporters
+	peerLock      *sync.RWMutex // protects peerCh
 	Codec         rpc.Codec
 	quitCh        chan struct{} // channel for signals to stop server
 	peers         *avl.Tree[string, *ProtcolPeer]
+	appIdToPeerId map[string]string
 	peerCountChan chan int
 	logger        *zap.SugaredLogger
 }
@@ -48,26 +50,24 @@ func (s *Server) ID() crypto.PublicKey {
 func NewServer(opts *ServerOpts) *Server {
 	// TODO: checks for inputs like null checks etc
 
-	peerCh := make(chan *network.Peer, 1024)
 	msgCh := make(chan *rpc.RPCMessage, 1024)
-	transporter := network.NewLibp2pTransport(peerCh, msgCh, nil, *opts.PrivateKey)
+	transporter := network.NewLibp2pTransport(msgCh, &rpc.JSONCodec{}, *opts.PrivateKey)
 	rpcProcessor := &ServerRPCProcessor{
-		handlers: make(map[rpc.MesageTopic]rpc.RPCProcessor),
-		logger:   logger.Get().Sugar(),
+		handlers:          make(map[rpc.MesageTopic]rpc.RPCProcessor),
+		logger:            logger.Get().Sugar(),
+		commsChWithServer: make(chan *rpc.InternalPeerServerInfoMsg, 1000),
 	}
 
 	s := &Server{
 		Transporter:   transporter,
 		RPCProcessor:  rpcProcessor,
-		peerCh:        peerCh,
 		peerLock:      &sync.RWMutex{},
 		ServerOpts:    opts,
 		quitCh:        make(chan struct{}),
+		appIdToPeerId: make(map[string]string),
 		peers:         avl.New[string, *ProtcolPeer](g.Greater[string]),
 		peerCountChan: make(chan int, 1000),
 	}
-
-	s.logger = logger.Get().Sugar().With("server_id", s.id)
 
 	// setting server's ID
 	s.id = s.PrivateKey.PublicKey()
@@ -80,36 +80,65 @@ func NewServer(opts *ServerOpts) *Server {
 		panic(fmt.Errorf("unsupported Codec type given in server opts"))
 	}
 
+	s.logger = logger.Get().Sugar().With("server_id", s.id.String())
+
 	transporter.SetCodec(s.Codec)
-	s.RPCProcessor.peerMap = s.peers
 
 	return s
 }
 
 func (s *Server) Start() {
 	// start transporter
-	s.Transporter.Start()
+	go s.Transporter.Start()
 	defer s.Transporter.Stop()
 
-	// log.Printf("accepting TCP connections on %v", s.ListenAddr)
-	// // bootstrap nodes
-	// go s.bootstrapNodes()
+	// added timer because the peerConsumer gorotuine was launching too
+	// early and the (buffered) peerCh inside Transporter was not initialized yet
+	// causing a deadlock
+	time.Sleep(2 * time.Second)
+
+	go func() {
+		for peer := range s.Transporter.ConsumePeers() {
+			s.logger.Infof("manual peer connected: %v", peer)
+			s.handleNewPeer(peer)
+		}
+	}()
 
 	// channel listerns; rpc and peer from transport layer
 free:
 	for {
 		select {
-		case peer := <-s.Transporter.ConsumePeers():
+		case infoMsg := <-s.RPCProcessor.commsChWithServer:
 			// add peer to peerMap
 			s.peerLock.Lock()
-			pPeer := &ProtcolPeer{peer}
-			s.peers.Put(peer.ID, pPeer)
-			s.peerCountChan <- s.peers.Size()
+			defer s.peerLock.Unlock()
 
-			// send StatusMsg to peer
-			s.sendHandshakeMsgToPeerNode(peer.ID)
+			s.peers.Each(func(k string, v *ProtcolPeer) {
+				s.logger.Infof("peerMap: %v -> %v", k, v)
+			})
 
-			s.peerLock.Unlock()
+			peer, ok := s.peers.Get(infoMsg.NetworkId)
+			if !ok {
+				s.logger.Error("peer not found in peerMap")
+				continue
+			}
+
+			// add to appIdToPeerId map
+			s.appIdToPeerId[infoMsg.ServerId] = infoMsg.NetworkId
+			peer.ServerID = infoMsg.ServerId
+
+		// case peer := <-s.Transporter.ConsumePeers():
+		// 	// add peer to peerMap
+		// 	s.logger.Debugf("peer connected: %v", peer)
+		// 	s.peerLock.Lock()
+		// 	pPeer := &ProtcolPeer{peer}
+		// 	s.peers.Put(peer.ID, pPeer)
+		// 	s.peerCountChan <- s.peers.Size()
+
+		// 	// send StatusMsg to peer
+		// 	s.sendHandshakeMsgToPeerNode(peer.ID)
+
+		// 	s.peerLock.Unlock()
 
 		case rpcMsg := <-s.Transporter.ConsumeMsgs():
 			msg, err := s.RPCProcessor.DefaultRPCDecoder(rpcMsg, s.Codec)
@@ -130,9 +159,11 @@ free:
 }
 
 // addr is that of the peer; only if its found in the peerMap
+// here id is peer's network_id not server_id since we don't know the server_id yet
 func (s *Server) sendHandshakeMsgToPeerNode(id string) error {
 	statusMsg := &rpc.StatusMsg{
-		Id:         s.ID(),
+		Id:         s.ID().String(),
+		NetworkId:  s.Transporter.ID(),
 		ListenAddr: string(s.Transporter.Addr()),
 	}
 
@@ -147,6 +178,8 @@ func (s *Server) sendHandshakeMsgToPeerNode(id string) error {
 		rpc.Server,
 	).SetPayload(statusMsg).Bytes()
 
+	s.logger.Debug("sending hadnshake with payload: ", rpcMsg)
+
 	if err != nil {
 		return err
 	}
@@ -154,7 +187,7 @@ func (s *Server) sendHandshakeMsgToPeerNode(id string) error {
 	return s.Transporter.SendMsg(id, rpcMsg)
 }
 
-// sending msg using peer's ID
+// sending msg using peer's server Id not network id
 func (s *Server) SendMsg(id string, msg []byte) error {
 	// constructing rpcMsg from msg in args
 	// msg contains payload, headers, topic i.e the rpc.Message structure
@@ -172,7 +205,13 @@ func (s *Server) SendMsg(id string, msg []byte) error {
 		return fmt.Errorf("failed to encode rpc message: %w", err)
 	}
 
-	return s.Transporter.SendMsg(id, rpcMsgBytes)
+	// get corresponding peerId to send msg
+	pID := s.appIdToPeerId[id]
+	if pID == "" {
+		return fmt.Errorf("peer not found")
+	}
+
+	return s.Transporter.SendMsg(pID, rpcMsgBytes)
 }
 
 func (s *Server) BroadcastMsg(msg []byte) error {
@@ -240,10 +279,27 @@ func (s *Server) GetPeerCount() int {
 // 	s.peerCountChan <- connected
 // }
 
+// id is server_id not network ID
 func (s *Server) IsPeer(id string) bool {
 	s.peerLock.RLock()
 	defer s.peerLock.RUnlock()
 
-	_, ok := s.peers.Get(id)
+	_, ok := s.appIdToPeerId[id]
 	return ok
+}
+
+func (s *Server) handleNewPeer(peer *network.Peer) {
+	// add peer to peerMap
+	s.peerLock.Lock()
+	pPeer := &ProtcolPeer{
+		ServerID: "",
+		Peer:     peer,
+	}
+	s.peers.Put(peer.ID, pPeer)
+	s.peerCountChan <- s.peers.Size()
+
+	// send StatusMsg to peer
+	s.sendHandshakeMsgToPeerNode(peer.ID)
+
+	s.peerLock.Unlock()
 }

@@ -19,4 +19,5 @@ type Transport interface {
 	Stop() error
 	DiscoverPeers() // responsible for discovering nodes in the network
 	SetCodec(rpc.Codec)
+	ID() string
 }
