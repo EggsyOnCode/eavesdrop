@@ -104,18 +104,14 @@ func (s *Server) Start() {
 		}
 	}()
 
-	// channel listerns; rpc and peer from transport layer
-free:
-	for {
-		select {
-		case infoMsg := <-s.RPCProcessor.commsChWithServer:
+	go func() {
+		for infoMsg := range s.RPCProcessor.commsChWithServer {
 			// add peer to peerMap
 			s.peerLock.Lock()
-			defer s.peerLock.Unlock()
 
-			s.peers.Each(func(k string, v *ProtcolPeer) {
-				s.logger.Infof("peerMap: %v -> %v", k, v)
-			})
+			// s.peers.Each(func(k string, v *ProtcolPeer) {
+			// 	s.logger.Infof("peerMap: %v -> %v", k, v)
+			// })
 
 			peer, ok := s.peers.Get(infoMsg.NetworkId)
 			if !ok {
@@ -126,6 +122,16 @@ free:
 			// add to appIdToPeerId map
 			s.appIdToPeerId[infoMsg.ServerId] = infoMsg.NetworkId
 			peer.ServerID = infoMsg.ServerId
+
+			s.peerLock.Unlock()
+		}
+	}()
+
+	// channel listerns; rpc and peer from transport layer
+free:
+	for {
+		select {
+		// case infoMsg := <-s.RPCProcessor.commsChWithServer:
 
 		// case peer := <-s.Transporter.ConsumePeers():
 		// 	// add peer to peerMap

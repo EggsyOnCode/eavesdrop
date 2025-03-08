@@ -122,7 +122,7 @@ func (lt *LibP2pTransport) Addr() utils.NetAddr {
 
 func (lt *LibP2pTransport) handleStream(s network.Stream) {
 	peerID := s.Conn().RemotePeer()
-	lt.logger.Info("New stream opened with peer:", peerID)
+	// lt.logger.Info("New stream opened with peer:", peerID)
 
 	// Launch a dedicated readLoop for this peer
 	go lt.readLoop(s, peerID)
@@ -135,7 +135,7 @@ func (lt *LibP2pTransport) readLoop(s network.Stream, peerID peer.ID) {
 		s.Close()
 	}()
 
-	lt.logger.Infof("ReadLoop for %v started", peerID)
+	// lt.logger.Infof("ReadLoop for %v started", peerID)
 
 	buf := make([]byte, 4096) // Buffer size can be adjusted
 	for {
@@ -165,7 +165,7 @@ func (lt *LibP2pTransport) readLoop(s network.Stream, peerID peer.ID) {
 		lt.msgCh <- rpcMsg
 		lt.mu.Unlock()
 
-		lt.logger.Infof("Received message from %v: %v", peerID, string(data))
+		// lt.logger.Infof("Received message from %v: %v", peerID, string(data))
 	}
 }
 
@@ -200,7 +200,7 @@ func (lt *LibP2pTransport) SendMsg(id string, data []byte) error {
 	}
 
 	// Send a message
-	lt.logger.Info("Sending message to peer:", peer.ID(id))
+	// lt.logger.Info("Sending message to peer:", peer.ID(id))
 
 	_, err = stream.Write(data)
 	if err != nil {
@@ -237,7 +237,7 @@ type discoveryNotifee struct {
 
 // Called when a new peer is discovered
 func (d *discoveryNotifee) HandlePeerFound(p peer.AddrInfo) {
-	logger.Get().Sugar().Info("Discovered a new peer:", p.ID, " host id ", d.h.ID())
+	// logger.Get().Sugar().Info("Discovered a new peer:", p.ID, " host id ", d.h.ID())
 	// DIRTY solution: adding a random delay of upto 2sec to avoid the TCP simulatenous connect error
 	time.Sleep(getPeerDelay(p.ID))
 

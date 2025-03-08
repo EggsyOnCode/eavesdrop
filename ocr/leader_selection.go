@@ -4,60 +4,54 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"eavesdrop/logger"
-	"encoding/binary"
+	"encoding/hex"
+	"fmt"
 
 	"github.com/zyedidia/generic/avl"
 )
 
-// selectLeader determines the leader for a given epoch using HMAC-SHA256 as the PRF.
-func selectLeader(epoch int, secretKey []byte, numOracles int) int {
-	if numOracles < 2 {
-		panic("Number of oracles must be at least 2")
-	}
-
-	// Convert epoch to byte slice
-	epochBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(epochBytes, uint64(epoch))
-
-	// Compute HMAC-SHA256(epoch, secretKey)
-	h := hmac.New(sha256.New, secretKey)
-	h.Write(epochBytes)
-	hashed := h.Sum(nil)
-
-	// Convert the first 8 bytes of the hash to an integer
-	randomInt := binary.BigEndian.Uint64(hashed[:8])
-
-	// Compute leader index using (Fx(e) mod (n-1)) + 1
-	leader := (int(randomInt) % (numOracles - 1)) + 1
-
-	return leader
-}
-
-// findLeader finds the leader peer in the AVL tree.
-func findLeader(epoch int, secretKey []byte, peers *avl.Tree[string, *ProtcolPeer]) *ProtcolPeer {
+// findLeader selects a leader deterministically using hashing instead of indexing.
+func findLeader(self string, epoch int, secretKey []byte, peers *avl.Tree[string, *ProtcolPeer]) *ProtcolPeer {
 	numOracles := peers.Size()
 	logger := logger.Get().Sugar()
-	if numOracles < 2 {
+	logger.Infof("epoch and secretKey and numOracles: %d, %s, %d", epoch, secretKey, numOracles)
+
+	if numOracles < 1 {
 		logger.Errorf("Not enough peers to select a leader")
 		return nil
 	}
 
-	leaderIndex := selectLeader(epoch, secretKey, numOracles)
+	var selectedPeer *ProtcolPeer
+	var minHash string
 
-	// Iterate over the AVL tree in sorted order and return the leader
-	i := 1
-	var leader *ProtcolPeer
+	// Compare all peer hashes
+	peers.Each(func(_ string, peer *ProtcolPeer) {
+		peerHash := hashPeer(epoch, secretKey, peer.ServerID)
 
-	// we will eventually find something , so no thread of
-	// infinite loop here
-	peers.Each(func(key string, peer *ProtcolPeer) {
-		logger.Info("PACEMAKER in peer Map: peer ", peer.ID)
-		if i == leaderIndex {
-			leader = peer
-			return // Stop iteration early
+		// Select the peer with the smallest hash
+		if selectedPeer == nil || peerHash < minHash {
+			selectedPeer = peer
+			minHash = peerHash
 		}
-		i++
 	})
 
-	return leader
+	// Also compute and compare self's hash
+	selfHash := hashPeer(epoch, secretKey, self)
+	if selfHash < minHash {
+		logger.Infof("Self has the smallest hash, becoming leader: %s", self)
+		return &ProtcolPeer{ServerID: self}
+	}
+
+	return selectedPeer
+}
+
+
+// hashPeer computes an HMAC-SHA256 hash for a peer based on epoch, secretKey, and peer ID.
+func hashPeer(epoch int, secretKey []byte, peerID string) string {
+	h := hmac.New(sha256.New, secretKey)
+	h.Write([]byte(peerID)) // Include peer ID
+	h.Write([]byte(fmt.Sprintf("%d", epoch)))
+
+	// Convert hash to hex string
+	return hex.EncodeToString(h.Sum(nil))
 }

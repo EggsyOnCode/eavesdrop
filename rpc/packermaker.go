@@ -10,15 +10,32 @@ import (
 type OCRState byte
 
 const (
-	PREPARE OCRState = 0x0
-	FOLLOWING OCRState = 0x1
-	LEADING OCRState = 0x2
+	PREPARE    OCRState = 0x0
+	FOLLOWING  OCRState = 0x1
+	LEADING    OCRState = 0x2
 	REPORT_GEN OCRState = 0x3
-	TRANSMIT OCRState = 0x4
+	TRANSMIT   OCRState = 0x4
 )
 
+func (s OCRState) String() string {
+	switch s {
+	case PREPARE:
+		return "PREPARE"
+	case FOLLOWING:
+		return "FOLLOWING"
+	case LEADING:
+		return "LEADING"
+	case REPORT_GEN:
+		return "REPORT_GEN"
+	case TRANSMIT:
+		return "TRANSMIT"
+	default:
+		return "UNKNOWN"
+	}
+}
+
 type PacemakerMessage struct {
-	Data    interface{} // OCRStatechange ....
+	Data interface{} // OCRStatechange ....
 }
 
 type OCRStateChange struct {
@@ -34,6 +51,3 @@ func (m *PacemakerMessage) Bytes() ([]byte, error) {
 
 	return buf.Bytes(), nil
 }
-
-
-

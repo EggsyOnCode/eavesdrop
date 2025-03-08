@@ -149,17 +149,22 @@ func (p *Pacemaker) Start() {
 		}
 	}()
 
+	p.server.peers.Each(func(k string, v *ProtcolPeer) {
+		p.logger.Infof("PACEMAKER: peer network id %s , server ID %s , server %s", v.ID, v.ServerID, p.ocrCtx.ID)
+	})
+
 	// select a leader
-	leader := exponentialBackoff(initTickerTime, maxBackoff, int(p.currEpochStat.e), secretKey, p.server.peers)
+	leader := exponentialBackoff(initTickerTime, maxBackoff, int(p.currEpochStat.e), secretKey, p.server.peers, p.ocrCtx.ID)
 
 	p.logger.Infof("PACEMAKER: Leader is %s , server ID : %v", leader.ServerID, p.ocrCtx.ID)
 
 	var isLeader bool
-	if leader.ID == p.ocrCtx.ID {
+	if leader.ServerID == p.ocrCtx.ID {
 		isLeader = true
 	} else {
 		isLeader = false
 	}
+
 	// update teh ocr staet accordingly
 	if isLeader {
 		p.upateOCRState(rpc.LEADING)
@@ -270,6 +275,7 @@ func (p *Pacemaker) SendNewEpochMsg() {
 }
 
 func (p *Pacemaker) upateOCRState(s rpc.OCRState) {
+	p.logger.Infof("PACEMAKER: updating OCR state to %s, server id %s", s, p.ocrCtx.ID)
 	paceMakerMsg := &rpc.PacemakerMessage{
 		Data: s,
 	}
@@ -290,7 +296,8 @@ func (p *Pacemaker) switchToNewEpoch() {
 
 	// if leader , send in the recEvents
 	// if follower, send in empty queue
-	leader := findLeader(int(p.currEpochStat.e), secretKey, p.server.peers)
+	leader := exponentialBackoff(initTickerTime, maxBackoff, int(p.currEpochStat.e), secretKey, p.server.peers, p.ocrCtx.ID)
+
 	if leader.ID == p.ocrCtx.ID {
 		Isleader = true
 	} else {
@@ -381,10 +388,13 @@ func exponentialBackoff(
 	epoch int,
 	secretKey []byte,
 	peers *avl.Tree[string, *ProtcolPeer],
+	serverID string,
 ) *ProtcolPeer {
 	backoff := initTickerTime
 	for {
-		leader := findLeader(epoch, secretKey, peers)
+
+		logger.Get().Sugar().Info("PACEMAKER: finding leader ", peers.Size(), epoch)
+		leader := findLeader(serverID, epoch, secretKey, peers)
 		if leader != nil {
 			return leader
 		}

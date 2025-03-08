@@ -3,11 +3,11 @@ module eavesdrop
 go 1.22.2
 
 require (
-	github.com/ethereum/go-ethereum v1.14.12
 	github.com/foize/go.fifo v0.0.0-20130327144150-3a04cfeec121
 	github.com/libp2p/go-libp2p v0.39.0
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/stretchr/testify v1.10.0
+	github.com/test-go/testify v1.1.4
 	github.com/zyedidia/generic v1.2.1
 	go.uber.org/zap v1.27.0
 )
@@ -32,7 +32,6 @@ require (
 	github.com/google/pprof v0.0.0-20250202011525-fc3143867406 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/holiman/uint256 v1.3.1 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
 	github.com/ipfs/go-cid v0.5.0 // indirect
 	github.com/ipfs/go-log/v2 v2.5.1 // indirect

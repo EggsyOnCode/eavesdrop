@@ -28,12 +28,11 @@ func (s *ServerRPCProcessor) ProcessMessage(msg *rpc.DecodedMsg) error {
 		// written from the pov of P2
 		// ctx: we will only recieve status Msgs from a peer from whom we have recently accepted a conn, and who must be in the peerTempMap , we can fetch them suing conn.RemoteAddr
 
-		s.logger.Infof("msg received from %v is %v \n", msg.FromId, msg)
-		s.logger.Infof("message type: %v", reflect.TypeOf(msg.Data))
+		// s.logger.Infof("msg received from %v is %v \n", msg.FromId, msg)
+		// s.logger.Infof("message type: %v", reflect.TypeOf(msg.Data))
 		switch msg.Data.(type) {
 		case *rpc.StatusMsg:
 			statusMsg := msg.Data.(*rpc.StatusMsg)
-			s.logger.Info("received status msg ", statusMsg)
 			infoMsg := rpc.InternalPeerServerInfoMsg{
 				NetworkId:  statusMsg.NetworkId,
 				ListenAddr: statusMsg.ListenAddr,
