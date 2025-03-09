@@ -7,6 +7,7 @@ import (
 	"eavesdrop/rpc"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	fifo "github.com/foize/go.fifo"
@@ -81,7 +82,10 @@ func NewPaceMaker(s *Server, ocrCh chan *rpc.PacemakerMessage, signer *crypto.Pr
 		recEventsChan: make(chan jobs.JobEventResponse),
 		recEvents:     *fifo.NewQueue(),
 		jobRegistry:   map[string]jobs.Job{},
-		Reporter:      &ReportingEngine{},
+		Reporter: &ReportingEngine{
+			mu:    sync.Mutex{},
+			ready: false,
+		},
 	}
 }
 
@@ -202,7 +206,10 @@ func (p *Pacemaker) Start() {
 	}
 
 	// init the Reporter
-	p.Reporter = NewReportingEngine(isLeader, p.currEpochStat.e, leader.ServerID, s_info, p_globals, *p.signer, p.server)
+	initReporter(p.Reporter, isLeader, p.currEpochStat.e, leader.ServerID, s_info, p_globals, *p.signer, p.server)
+
+	time.Sleep(2 * time.Second)
+
 	// if the node is a follower, p.recEvents should be len(0) and will be ignored
 	go p.Reporter.Start(&p.recEvents, &p.jobRegistry)
 
@@ -290,7 +297,6 @@ func (p *Pacemaker) switchToNewEpoch() {
 	p.currEpochStat.n_e0 = 0
 	p.currEpochStat.new_e = 0
 
-	var repoter ReportingEngine
 	var Isleader bool
 	// recEvents are the events that have been recorded by the reporting engine during current epoch
 
@@ -312,8 +318,7 @@ func (p *Pacemaker) switchToNewEpoch() {
 			n: uint(p.currEpochStat.n),
 			f: uint(p.currEpochStat.f),
 		}
-		repoter = *NewReportingEngine(Isleader, p.currEpochStat.e, leader.ID, p.Reporter.serverOpts, pGlobals, *p.signer, p.server)
-		p.Reporter = &repoter
+		initReporter(p.Reporter, Isleader, p.currEpochStat.e, leader.ID, p.Reporter.serverOpts, pGlobals, *p.signer, p.server)
 	}
 
 	if leader.ID == p.ocrCtx.ID {

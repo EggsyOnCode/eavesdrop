@@ -43,8 +43,9 @@ func (re *ReportingEngine) handleObserve() {
 	// will have to listen to the OBSERVE messages from the leader
 	// and update the state accordingly
 
-	// increment hte round number
-	re.curRound++
+	// increment hte round number - NOTE: no need to incremenet as per spec,
+	// sen whatever round is that of the leader
+	// re.curRound++
 
 	// get the list of jobs to be processed in nextRound
 	curRoundJobInfos := re.GetJobInfosForCurrRound()
@@ -77,9 +78,9 @@ func (re *ReportingEngine) handleObserve() {
 	// start the round timer (have a handler for the timer expiry) in top most loop
 	re.LeaderState.TimerRoundTimeout = NewTimer(RoundTmeout)
 
-	// change state to OBSERVE
 	re.Phase = PhaseObserve
-	re.phaseCh <- PhaseObserve
+	// // change state to OBSERVE - already in observe phase
+	// re.phaseCh <- PhaseObserve
 }
 
 func (re *ReportingEngine) handleGrace() {

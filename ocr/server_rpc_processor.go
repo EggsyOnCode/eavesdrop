@@ -106,6 +106,29 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 			Data:   newMsg,
 		}, nil
 
+	case rpc.MessageReportRes:
+		newMsg := &rpc.ReportRes{}
+		if err := codec.Decode(msg.Data, newMsg); err != nil {
+			return nil, err
+		}
+		return &rpc.DecodedMsg{
+			FromId:    rpcMsg.FromID,
+			Topic:     msg.Topic,
+			Data:      newMsg,
+			Signature: rpcMsg.Signature,
+		}, nil
+
+	case rpc.MessageReportReq:
+		newMsg := &rpc.ReportReq{}
+		if err := codec.Decode(msg.Data, newMsg); err != nil {
+			return nil, err
+		}
+		return &rpc.DecodedMsg{
+			FromId: rpcMsg.FromID,
+			Topic:  msg.Topic,
+			Data:   newMsg,
+		}, nil
+
 	case rpc.MessageObserveRes:
 		newMsg := &rpc.ObserveResp{}
 		if err := codec.Decode(msg.Data, newMsg); err != nil {
@@ -117,6 +140,8 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 			Data:      newMsg,
 			Signature: rpcMsg.Signature,
 		}, nil
+
+
 	case rpc.MessageChangeLeader:
 		newMsg := &rpc.ChangeLeaderMessage{}
 		if err := codec.Decode(msg.Data, newMsg); err != nil {
@@ -127,6 +152,18 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 			Topic:  msg.Topic,
 			Data:   newMsg,
 		}, nil
+
+	case rpc.MessageObservationMap:
+		newMsg := &rpc.BroadcastObservationMap{}
+		if err := codec.Decode(msg.Data, newMsg); err != nil {
+			return nil, err
+		}
+		return &rpc.DecodedMsg{
+			FromId: rpcMsg.FromID,
+			Topic:  msg.Topic,
+			Data:   newMsg,
+		}, nil
+
 	default:
 
 		s.logger.Errorf("msg received: %v", msg)

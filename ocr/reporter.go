@@ -3,6 +3,7 @@ package ocr
 import (
 	"context"
 	c "eavesdrop/crypto"
+	"eavesdrop/logger"
 	"eavesdrop/ocr/jobs"
 	"eavesdrop/rpc"
 	"eavesdrop/utils"
@@ -65,6 +66,8 @@ type ReportingEngine struct {
 	recEvents        *fifo.Queue
 	jobRegistry      *map[string]jobs.Job // used to query the job info when an event is received
 	jobSchedule      map[int][]jobs.Job   // schedule of jobs to be observed in each round
+	mu               sync.Mutex
+	ready            bool
 }
 
 func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info ServerInfo, p_globals PacemakerGlobals, signer c.PrivateKey, s *Server) *ReportingEngine {
@@ -88,6 +91,8 @@ func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info Serve
 		curRound:         INIT_ROUND,
 		isLeader:         isLeader,
 		pacemakerGlobals: p_globals,
+		mu:               sync.Mutex{},
+		ready:            false,
 		cacheLayer: CacheLayer{
 			observe_n: 0,
 			report_n:  0,
@@ -96,7 +101,8 @@ func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info Serve
 
 	re.msgService = s
 	// config logger setup
-	re.logger = zap.S().With("epoch", epoch, "leader", leader, "round", re.curRound)
+	re.logger = logger.Get().Sugar().With("epoch", epoch, "leader", leader, "round", re.curRound, "is_leader", isLeader)
+	re.logger.Infof("RE: create new reporting engine with config epoch: %d, leader: %s, round: %d", epoch, leader, re.curRound)
 
 	// if leader , do some intial config
 	if isLeader {
@@ -138,6 +144,10 @@ func (re *ReportingEngine) Start(recEvents *fifo.Queue, jobReg *map[string]jobs.
 	} else {
 		go re.orchestrateFollowing()
 	}
+
+	re.mu.Lock()
+	re.ready = true
+	re.mu.Unlock()
 }
 
 func (re *ReportingEngine) orchestrateLeadership() {
@@ -200,15 +210,21 @@ func (re *ReportingEngine) AttachMsgLayer(msgService MessagingLayer) {
 
 // all messages with say topic Reporter will be routed to repoter.ProcessMessage, now this msgs could be of any type , like leader senidng msg, braodcsating something, an oracle submitting an observation (all of these msgs should be defiend in rpc_leader.go inside rpc pkg i think), so reporter.ProcessMessage could either handle all of them itself and update the state of the RE glovally or it could delegrate, for now, lets shouild build a monolithic RPC handler for reptoer inside ProcessMessgae
 func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
+	re.mu.Lock()
+	if !re.ready {
+		return fmt.Errorf("RE: not ready to process messages")
+	}
+	re.mu.Unlock()
+
 	// prechecks
 	if res, err := re.rpcMsgPrechecks(msg); err != nil || !res {
 		return fmt.Errorf("RE: rpc msg prechecks failed due to %v", err)
 	}
 
 	switch msg.Data.(type) {
-	case rpc.ObserveReq:
+	case *rpc.ObserveReq:
 		//shall only be recevied by followers
-		msg := msg.Data.(rpc.ObserveReq)
+		msg := msg.Data.(*rpc.ObserveReq)
 		re.logger.Infof("RE: received OBSERVE-REQ msg: %v", msg)
 
 		re.curRound = int(msg.Round)
@@ -346,10 +362,12 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 		return nil
 
-	case rpc.ObserveResp:
+	case *rpc.ObserveResp:
 		// shall only be received by teh leader
 
-		observation := msg.Data.(rpc.ObserveResp)
+		observation := msg.Data.(*rpc.ObserveResp)
+		re.logger.Infof("RE: received OBSERVE-RES msg: %v", msg)
+
 		if (observation.Round == uint64(re.curRound)) && (observation.Epoch == re.epoch) {
 			// verify the msg signature
 			msgBytes, err := observation.Bytes(re.serverOpts.Codec)
@@ -390,11 +408,12 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 		}
 
 		return nil
-	case rpc.BroadcastObservationMap:
+	case *rpc.BroadcastObservationMap:
 		// received by followers from leader
 
 		// Step 1: Extract and Unmarshal Observations
-		observationMap := msg.Data.(rpc.BroadcastObservationMap).Observations
+		observationMap := msg.Data.(*rpc.BroadcastObservationMap).Observations
+		re.logger.Infof("RE: received BROADCAST-OBSERVATION-MAP msg: %v", msg)
 
 		var obsMap ObservationSafeMap
 		if err := obsMap.UnmarshalJSON(observationMap); err != nil {
@@ -408,7 +427,7 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 		return nil
 
-	case rpc.ReportReq:
+	case *rpc.ReportReq:
 		// will be received by followers
 
 		// some docs: leader sends us observations of all the
@@ -419,7 +438,8 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 		// []{jobID: finalValue}
 
 		// Step 1: Extract and Unmarshal Observations
-		observationMap := msg.Data.(rpc.ReportReq).Observations
+		observationMap := msg.Data.(*rpc.ReportReq).Observations
+		re.logger.Infof("RE: received REPORT-REQ msg: %v", msg)
 
 		var obsMap ObservationSafeMap
 		if err := obsMap.UnmarshalJSON(observationMap); err != nil {
@@ -500,9 +520,10 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 		return nil
 
-	case rpc.ReportRes:
+	case *rpc.ReportRes:
 		// will be received by the leader (from the followers)
-		reports := msg.Data.(rpc.ReportRes)
+		reports := msg.Data.(*rpc.ReportRes)
+		re.logger.Infof("RE: received REPORT-RES msg: %v", msg)
 
 		// verify the msg signature
 		msgBytes, err := reports.Bytes(re.serverOpts.Codec)
@@ -550,11 +571,12 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 		return nil
 
-	case rpc.BroadcastFinalReport:
+	case *rpc.BroadcastFinalReport:
 		// Only followers receive this
 
 		// Step 1: Extract and Unmarshal Final Report
-		finalReportMsg := msg.Data.(rpc.BroadcastFinalReport)
+		finalReportMsg := msg.Data.(*rpc.BroadcastFinalReport)
+		re.logger.Infof("RE: received BROADCAST-FINAL-REPORT msg: %v", msg)
 
 		msgBytes, err := finalReportMsg.Bytes(re.serverOpts.Codec)
 		if err != nil {
@@ -620,10 +642,12 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 		return nil
 
-	case rpc.FinalEcho:
+	case *rpc.FinalEcho:
 		// received by the leader only
 
-		finalEcho := msg.Data.(rpc.FinalEcho)
+		finalEcho := msg.Data.(*rpc.FinalEcho)
+		re.logger.Infof("RE: received FINAL-ECHO msg: %v", msg)
+
 		if (finalEcho.Epoch != re.epoch) || (finalEcho.Round != uint64(re.curRound) || (finalEcho.Leader != re.leader)) {
 			re.logger.Errorf("RE: final echo msg for wrong epoch or round")
 			return nil
@@ -651,10 +675,11 @@ func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 
 		return nil
 
-	case rpc.ProgressRound:
+	case *rpc.ProgressRound:
 		// received by the follower only only
 
-		progressMsg := msg.Data.(rpc.ProgressRound)
+		progressMsg := msg.Data.(*rpc.ProgressRound)
+		re.logger.Infof("RE: received PROGRESS-ROUND msg: %v", msg)
 
 		msgBytes, err := progressMsg.Bytes(re.serverOpts.Codec)
 		if err != nil {
@@ -851,9 +876,10 @@ func (re *ReportingEngine) rpcMsgPrechecks(msg *rpc.DecodedMsg) (bool, error) {
 	// also if the msg's curr round or epoch is diff, handle that accordingly
 
 	arbMsg := msg.Data
-	if epoch, round, leader, phase, err := getCommonFieldsAndPhase(arbMsg); err != nil {
+	if epoch, round, leader, _, err := getCommonFieldsAndPhase(arbMsg); err != nil {
 		return false, err
 	} else {
+
 		if epoch != re.epoch {
 			return false, fmt.Errorf("RE: message has incorrect epoch (expected %d, got %d)", re.epoch, epoch)
 		}
@@ -863,11 +889,49 @@ func (re *ReportingEngine) rpcMsgPrechecks(msg *rpc.DecodedMsg) (bool, error) {
 		if leader != re.leader {
 			return false, fmt.Errorf("RE: message has incorrect leader (expected %s, got %s)", re.leader, leader)
 		}
-		if re.Phase != phase {
-			return false, fmt.Errorf("RE: message has incorrect phase (expected %v, got %v)", re.Phase, phase)
-		}
+
+		// followers have no phase tracking, so its unncessary to add them in preChecks
+
+		// if re.Phase != phase {
+		// 	return false, fmt.Errorf("RE: message has incorrect phase (expected %v, got %v)", re.Phase, phase)
+		// }
 
 	}
 
 	return true, nil
+}
+
+func initReporter(re *ReportingEngine, isLeader bool, epoch uint64, leader string, s_info ServerInfo, p_globals PacemakerGlobals, signer c.PrivateKey, s *Server) {
+	re.mu.Lock()
+	defer re.mu.Unlock()
+
+	re.epoch = epoch
+	re.serverOpts = s_info
+	re.leader = leader
+	re.jobSchedule = map[int][]jobs.Job{}
+	re.signer = signer
+	re.jobRegistry = &map[string]jobs.Job{}
+	re.LeaderState = LeaderState{
+		observations:      ObservationSafeMap{},
+		reports:           make([]Report, 1),
+		TimerRoundTimeout: &Timer{},
+		TimerGrace:        &Timer{},
+		Phase:             PhaseNil, // should only be set if leader
+		phaseCh:           make(chan LeaderPhase),
+	}
+	re.curRound = INIT_ROUND
+	re.isLeader = isLeader
+	re.pacemakerGlobals = p_globals
+	re.ready = false
+	re.cacheLayer = CacheLayer{
+		observe_n: 0,
+		report_n:  0,
+	}
+	re.msgService = s
+	re.logger = logger.Get().Sugar().With("epoch", epoch, "leader", leader, "round", re.curRound, "is_leader", isLeader)
+	re.logger.Infof("RE: Initialized reporting engine with epoch: %d, leader: %s, round: %d", epoch, leader, re.curRound)
+
+	if isLeader {
+		re.LeaderState.Phase = PhaseObserve // initial state
+	}
 }

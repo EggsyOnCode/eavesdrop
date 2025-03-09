@@ -16,7 +16,6 @@ import (
 )
 
 // the protocol level rep of network Peer; this DS can be extended to include other info later on
-// network.Peer.ID should be === Server.ID
 type ProtcolPeer struct {
 	ServerID string // server ID (From appToPeerId)
 	*network.Peer
