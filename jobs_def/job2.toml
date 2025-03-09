@@ -4,7 +4,7 @@ chainID = "ethereum"
 evmChainID = 1
 externalJobId = "39d6e512-4b24-4877-8d08-68d4a2d39e19"
 name = "eth mode request"
-contractAddress = "0x9876543210abcdef9876543210abcdef98765432"
+contractAddress = "0x1234567890abcdef1234567890abcdef12345678"
 
 [reporting]
 strategy = "mode"

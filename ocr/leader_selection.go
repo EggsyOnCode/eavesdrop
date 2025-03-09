@@ -38,13 +38,11 @@ func findLeader(self string, epoch int, secretKey []byte, peers *avl.Tree[string
 	// Also compute and compare self's hash
 	selfHash := hashPeer(epoch, secretKey, self)
 	if selfHash < minHash {
-		logger.Infof("Self has the smallest hash, becoming leader: %s", self)
 		return &ProtcolPeer{ServerID: self}
 	}
 
 	return selectedPeer
 }
-
 
 // hashPeer computes an HMAC-SHA256 hash for a peer based on epoch, secretKey, and peer ID.
 func hashPeer(epoch int, secretKey []byte, peerID string) string {

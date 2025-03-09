@@ -22,7 +22,7 @@ const (
 	RoundTmeout time.Duration = time.Second * 20
 	RoundGrace  time.Duration = time.Second * 5
 
-	jobsDir string = "../jobs_def"
+	jobsDir string = "./jobs_def"
 )
 
 // info about the server (p2p network) that needs to be exposed to the reporting engine
@@ -67,7 +67,7 @@ type ReportingEngine struct {
 	jobSchedule      map[int][]jobs.Job   // schedule of jobs to be observed in each round
 }
 
-func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info ServerInfo, p_globals PacemakerGlobals, signer c.PrivateKey) *ReportingEngine {
+func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info ServerInfo, p_globals PacemakerGlobals, signer c.PrivateKey, s *Server) *ReportingEngine {
 	re := &ReportingEngine{
 		epoch:       epoch,
 		serverOpts:  s_info,
@@ -94,6 +94,7 @@ func NewReportingEngine(isLeader bool, epoch uint64, leader string, s_info Serve
 		},
 	}
 
+	re.msgService = s
 	// config logger setup
 	re.logger = zap.S().With("epoch", epoch, "leader", leader, "round", re.curRound)
 
@@ -201,7 +202,7 @@ func (re *ReportingEngine) AttachMsgLayer(msgService MessagingLayer) {
 func (re *ReportingEngine) ProcessMessage(msg *rpc.DecodedMsg) error {
 	// prechecks
 	if res, err := re.rpcMsgPrechecks(msg); err != nil || !res {
-		return fmt.Errorf("RE: rpc msg prechecks failed")
+		return fmt.Errorf("RE: rpc msg prechecks failed due to %v", err)
 	}
 
 	switch msg.Data.(type) {
@@ -853,9 +854,19 @@ func (re *ReportingEngine) rpcMsgPrechecks(msg *rpc.DecodedMsg) (bool, error) {
 	if epoch, round, leader, phase, err := getCommonFieldsAndPhase(arbMsg); err != nil {
 		return false, err
 	} else {
-		if (epoch != re.epoch) || (round != uint64(re.curRound)) || (leader != re.leader) || re.Phase != phase {
-			return false, fmt.Errorf("RE: msg for wrong epoch or round or phase or leader")
+		if epoch != re.epoch {
+			return false, fmt.Errorf("RE: message has incorrect epoch (expected %d, got %d)", re.epoch, epoch)
 		}
+		if round != uint64(re.curRound) {
+			return false, fmt.Errorf("RE: message has incorrect round (expected %d, got %d)", re.curRound, round)
+		}
+		if leader != re.leader {
+			return false, fmt.Errorf("RE: message has incorrect leader (expected %s, got %s)", re.leader, leader)
+		}
+		if re.Phase != phase {
+			return false, fmt.Errorf("RE: message has incorrect phase (expected %v, got %v)", re.Phase, phase)
+		}
+
 	}
 
 	return true, nil

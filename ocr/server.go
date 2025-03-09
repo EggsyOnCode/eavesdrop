@@ -99,7 +99,7 @@ func (s *Server) Start() {
 
 	go func() {
 		for peer := range s.Transporter.ConsumePeers() {
-			s.logger.Infof("manual peer connected: %v", peer)
+			// s.logger.Infof("manual peer connected: %v", peer)
 			s.handleNewPeer(peer)
 		}
 	}()
@@ -194,50 +194,20 @@ func (s *Server) sendHandshakeMsgToPeerNode(id string) error {
 }
 
 // sending msg using peer's server Id not network id
-func (s *Server) SendMsg(id string, msg []byte) error {
-	// constructing rpcMsg from msg in args
-	// msg contains payload, headers, topic i.e the rpc.Message structure
-	rpcMsg, err := rpc.NewRPCMessageBuilder(
-		utils.NetAddr(s.ListenAddr),
-		s.Codec,
-		s.id.String(),
-	).SetMessage(msg).Build()
-	if err != nil {
-		return fmt.Errorf("failed to build rpc message: %w", err)
-	}
-
-	rpcMsgBytes, err := rpcMsg.Bytes(s.Codec)
-	if err != nil {
-		return fmt.Errorf("failed to encode rpc message: %w", err)
-	}
-
+// rpcMsg is the encoded rpc.Message in bytes
+func (s *Server) SendMsg(id string, rpcMsg []byte) error {
 	// get corresponding peerId to send msg
 	pID := s.appIdToPeerId[id]
 	if pID == "" {
 		return fmt.Errorf("peer not found")
 	}
 
-	return s.Transporter.SendMsg(pID, rpcMsgBytes)
+	return s.Transporter.SendMsg(pID, rpcMsg)
 }
 
-func (s *Server) BroadcastMsg(msg []byte) error {
-	// constructing rpcMsg from msg in args
-	// msg contains payload, headers, topic i.e the rpc.Message structure
-	rpcMsg, err := rpc.NewRPCMessageBuilder(
-		utils.NetAddr(s.ListenAddr),
-		s.Codec,
-		s.ID().String(),
-	).SetMessage(msg).Build()
-	if err != nil {
-		return fmt.Errorf("failed to build rpc message: %w", err)
-	}
-
-	rpcMsgBytes, err := rpcMsg.Bytes(s.Codec)
-	if err != nil {
-		return fmt.Errorf("failed to encode rpc message: %w", err)
-	}
-
-	s.Transporter.Broadcast(rpcMsgBytes)
+// rpcMsg is the encoded rpc.Message in bytes
+func (s *Server) BroadcastMsg(rpcMsg []byte) error {
+	s.Transporter.Broadcast(rpcMsg)
 
 	return nil
 }

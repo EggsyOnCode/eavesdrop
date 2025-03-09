@@ -4,7 +4,7 @@ chainID = "ethereum"
 evmChainID = 1
 externalJobId = "bca23d77-591b-4f2e-9f6a-88b7e7cb9a47"
 name = "eth median request"
-contractAddress = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcdef"
+contractAddress = "0x1234567890abcdef1234567890abcdef12345678"
 
 [reporting]
 strategy = "median"

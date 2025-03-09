@@ -56,7 +56,6 @@ func (o *OCR) Start() error {
 
 	// including server ID in oct ctx
 	o.ctx.ID = o.Server.ID().String()
-	fmt.Println("////// id of the server is ", o.ctx.ID)
 
 	go func() {
 		// can be updated in future, so the func should have a permanet listener
@@ -79,7 +78,7 @@ func (o *OCR) Start() error {
 
 	// register rpc processor in server for handling incoming rpc msg
 	o.Server.RPCProcessor.RegisterHandler(rpc.Pacemaker, o.Pacemaker)
-	o.Server.RPCProcessor.RegisterHandler(rpc.Pacemaker, o.Pacemaker.Reporter)
+	o.Server.RPCProcessor.RegisterHandler(rpc.Reporter, o.Pacemaker.Reporter)
 
 	//TODO: how to register handlers for reporter in Server o.Server.RPCProcessor.RegisterHandler(rpc.Reporter, o.Reporter)
 

@@ -202,7 +202,7 @@ func (p *Pacemaker) Start() {
 	}
 
 	// init the Reporter
-	p.Reporter = NewReportingEngine(isLeader, p.currEpochStat.e, leader.ID, s_info, p_globals, *p.signer)
+	p.Reporter = NewReportingEngine(isLeader, p.currEpochStat.e, leader.ServerID, s_info, p_globals, *p.signer, p.server)
 	// if the node is a follower, p.recEvents should be len(0) and will be ignored
 	go p.Reporter.Start(&p.recEvents, &p.jobRegistry)
 
@@ -312,7 +312,7 @@ func (p *Pacemaker) switchToNewEpoch() {
 			n: uint(p.currEpochStat.n),
 			f: uint(p.currEpochStat.f),
 		}
-		repoter = *NewReportingEngine(Isleader, p.currEpochStat.e, leader.ID, p.Reporter.serverOpts, pGlobals, *p.signer)
+		repoter = *NewReportingEngine(Isleader, p.currEpochStat.e, leader.ID, p.Reporter.serverOpts, pGlobals, *p.signer, p.server)
 		p.Reporter = &repoter
 	}
 

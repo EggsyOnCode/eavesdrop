@@ -95,6 +95,7 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 		}, nil
 
 	case rpc.MessageObserveReq:
+		s.logger.Infof("observe req received: %v", msg)
 		newMsg := &rpc.ObserveReq{}
 		if err := codec.Decode(msg.Data, newMsg); err != nil {
 			return nil, err
@@ -127,6 +128,8 @@ func (s *ServerRPCProcessor) DefaultRPCDecoder(rpcMsg *rpc.RPCMessage, codec rpc
 			Data:   newMsg,
 		}, nil
 	default:
+
+		s.logger.Errorf("msg received: %v", msg)
 		return nil, fmt.Errorf("unknown message type: %v", msg.Headers)
 	}
 }

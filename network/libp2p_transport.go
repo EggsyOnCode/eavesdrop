@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 	"time"
 
@@ -22,6 +23,8 @@ import (
 	discovery "github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	"go.uber.org/zap"
+
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 )
 
 const (
@@ -43,6 +46,9 @@ type LibP2pTransport struct {
 	codec  rpc.Codec
 	logger *zap.SugaredLogger
 	pk     c.PrivKey
+
+	streams  map[peer.ID]network.Stream // Cache for active streams
+	streamMu sync.Mutex                 // to protect the streams map
 }
 
 // peerCh passed down as dependency from the server, to be used to inform the callers of newly connected
@@ -50,16 +56,27 @@ type LibP2pTransport struct {
 func NewLibp2pTransport(msgCh chan *rpc.RPCMessage, codec rpc.Codec, pk cr.PrivateKey) *LibP2pTransport {
 	priv, _, _ := c.KeyPairFromStdKey(pk.Key())
 	return &LibP2pTransport{
-		msgCh:  msgCh,
-		peerCh: make(chan *Peer, 100),
-		logger: logger.Get().Sugar(),
-		codec:  codec,
-		pk:     priv,
+		msgCh:    msgCh,
+		peerCh:   make(chan *Peer, 100),
+		logger:   logger.Get().Sugar(),
+		streamMu: sync.Mutex{},
+		streams:  make(map[peer.ID]network.Stream),
+		mu:       sync.Mutex{},
+		codec:    codec,
+		pk:       priv,
 	}
 }
 
 func (lt *LibP2pTransport) Start() {
+	// configure the resource limits
+	limiter := rcmgr.NewFixedLimiter(rcmgr.DefaultLimits.AutoScale())
+	rmgr, err := rcmgr.NewResourceManager(limiter)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	host, err := libp2p.New(
+		libp2p.ResourceManager(rmgr),
 		libp2p.Identity(lt.pk),
 		libp2p.ListenAddrStrings(
 			"/ip4/127.0.0.1/tcp/0",
@@ -192,19 +209,28 @@ func (lt *LibP2pTransport) SendMsg(id string, data []byte) error {
 		return err
 	}
 
-	// Open a stream to the peer
-	stream, err := lt.host.NewStream(context.Background(), pID, protocolID)
-	if err != nil {
-		fmt.Println("Failed to open stream:", err)
-		return err
+	lt.streamMu.Lock()
+	stream, exists := lt.streams[pID]
+	lt.streamMu.Unlock()
+
+	if !exists {
+		// Open a new stream only if it doesn't exist
+		stream, err = lt.host.NewStream(context.Background(), pID, protocolID)
+		if err != nil {
+			lt.logger.Error("Failed to open stream:", err)
+			return err
+		}
+
+		lt.streamMu.Lock()
+		lt.streams[pID] = stream // Store the stream for reuse
+		lt.streamMu.Unlock()
 	}
 
-	// Send a message
-	// lt.logger.Info("Sending message to peer:", peer.ID(id))
-
+	// Send the message over the existing stream
 	_, err = stream.Write(data)
 	if err != nil {
 		lt.logger.Error("Error writing to stream:", err)
+		return err
 	}
 
 	return nil
@@ -213,6 +239,7 @@ func (lt *LibP2pTransport) SendMsg(id string, data []byte) error {
 // braodcast
 func (lt *LibP2pTransport) Broadcast(data []byte) {
 	peersId := lt.host.Network().Peers()
+
 	for _, peer := range peersId {
 		err := lt.SendMsg(peer.String(), data)
 		if err != nil {

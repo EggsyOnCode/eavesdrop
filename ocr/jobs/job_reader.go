@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	toml "github.com/pelletier/go-toml/v2"
 	"go.uber.org/zap"
@@ -116,8 +117,8 @@ func ReadJobsFromDir(dir string) ([]io.Reader, error) {
 		if file.IsDir() {
 			continue
 		}
-
-		f, err := os.Open(file.Name())
+		filePath := filepath.Join(dir, file.Name()) // Construct full path
+		f, err := os.Open(filePath)
 		if err != nil {
 			return nil, err
 		}
